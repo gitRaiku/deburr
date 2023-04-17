@@ -5,19 +5,63 @@
 #include <unistd.h>
 #include <locale.h>
 #include <fcntl.h>
+
 #include <sys/mman.h>
+#include <linux/input.h>
 
 #include <wayland-client.h>
+#include <wayland-cursor.h>
 
 #include "../protocol/xdgsh-protocol.h"
 #include "../protocol/xout-protocol.h"
 #include "../protocol/zwlr-protocol.h"
 
+#include "config.h"
 #include "vecs.h"
+
+#define COMPV 4
+#define SHMV 1
+#define ZWLRV 4
+#define XWMBASEV 2
+#define XOUTMGRV 3
+#define SEATV 7
+#define WOUTV 1
+
+struct sbuf {
+  uint32_t height, width;
+  uint32_t size;
+  uint32_t fd;
+  uint32_t *data;
+  struct wl_buffer *__restrict b[2];
+  uint8_t csel;
+};
+
+struct cfont {
+};
+
+struct cmon {
+	uint32_t n;
+  const char *xdgname;
+  struct wl_output *out;
+  struct zxdg_output_v1 *xout;
+  struct zwlr_layer_surface_v1 *lsurf;
+  struct wl_surface *surf;
+	uint32_t tags;
+  struct sbuf sb;
+  struct cfont font;
+};
+
+struct cseatp {
+  struct wl_pointer *p;
+  struct cmon *fmon;
+  int32_t x, y;
+  uint8_t cpres;
+};
 
 struct cseat {
   uint32_t n;
-  struct wl_seat* s;
+  struct wl_seat *s;
+  struct cseatp p;
 };
 
 struct coutp {
@@ -25,8 +69,8 @@ struct coutp {
   struct wl_output* o;
 };
 
-DEF_VECTOR_SUITE(seat, struct wcseat)
-DEF_VECTOR_SUITE(outp, struct wcoutp)
+DEF_VECTOR_SUITE(seat, struct cseat)
+//DEF_VECTOR_SUITE(outp, struct coutp)
 
 #define FUNNIERCSTRING(x) #x
 #define FUNNYCSTRING(x) FUNNIERCSTRING(x)
