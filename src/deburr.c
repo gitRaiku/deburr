@@ -147,7 +147,7 @@ void cbufs(struct cmon *mon, uint32_t width, uint32_t height, enum wl_shm_format
   uint32_t size = stride * height;
   uint32_t fd = cshmf(size * 2);
   struct wl_shm_pool *pool = wl_shm_create_pool(state.shm, fd, size * 2);
-  uint32_t *__restrict data = mmap(NULL, size * 2, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  uint32_t *data = mmap(NULL, size * 2, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   WLCHECK(data!=MAP_FAILED,"Could not mmap the shm data!");
   mon->sb.b[0] = wl_shm_pool_create_buffer(pool,    0, width, height, stride, form);
   WLCHECK(mon->sb.b[0],"Could not create the first shm buffer!");
@@ -166,16 +166,21 @@ void render(struct cmon *mon) {
 	if (!mon->sb.b[0]) { return; }
 
   /* Draw checkerboxed background */
-  for (int y = 0; y < mon->sb.height; ++y) {
-    for (int x = 0; x < mon->sb.width; ++x) {
+  uint32_t co = mon->sb.size * mon->sb.csel / 4;
+  uint32_t h = mon->sb.height;
+  uint32_t w = mon->sb.width;
+  fprintf(stdout, "Size %ux%u\n", mon->sb.width, mon->sb.height);
+  fprintf(stdout, "Coffset %u\n", co);
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
       if ((x + y / 8 * 8 + (uint32_t)ofs) % 16 < 8) {
-        mon->sb.data[mon->sb.size * mon->sb.csel + y * state.width + x] = 0xFF666666;
+        mon->sb.data[co + y * w + x] = 0xFF666666;
       } else {
-        mon->sb.data[mon->sb.size * mon->sb.csel + y * state.width + x] = 0xFFEEEEEE;
+        mon->sb.data[co + y * w + x] = 0xFFEEEEEE;
       }
     }
   }
-  ++ofs;
+  ofs += 0.5;
 
 	wl_surface_attach(mon->surf, mon->sb.b[mon->sb.csel], 0, 0);
 	wl_surface_damage(mon->surf, 0, 0, mon->sb.width, mon->sb.height);
@@ -201,6 +206,8 @@ void finish_init() {
   CHECK_INIT(xoutmgr   , zxdg_output_manager_v1, XOUTMGRV);
 #undef CHECK_INIT
 
+  seatvt(&state.seats);
+
   /// TODO: Add support for multiple monitors
   state.mon.xout = zxdg_output_manager_v1_get_xdg_output(state.xoutmgr, state.mon.out);
   zxdg_output_v1_add_listener(state.mon.xout, &zxout_listener, &state.mon.out);
@@ -210,6 +217,8 @@ void finish_init() {
 void reg_global(void *data, struct wl_registry *reg, uint32_t name, const char *iface, uint32_t ver) {
 #define CHI(x,y,z,w) {if(!strcmp(iface,y .name)) {state. x=wl_registry_bind(reg, name, &y, z);w;return;}}
 #define CHV(x,y,z,w) {if(!strcmp(iface,y .name)) {x cbind=wl_registry_bind(reg, name, &y, z);w;return;}}
+
+  seatvi(&state.seats);
 
   CHI(comp           , wl_compositor_interface         , COMPV,);
   CHI(shm            , wl_shm_interface                , SHMV,);
@@ -245,6 +254,19 @@ void init_rand() {
   fclose(sr);
 }
 
+void frame_done(void *data, struct wl_callback *cb, uint32_t d) {
+  struct cmon *mon = data;
+  render(mon);
+  wl_callback_destroy(cb);
+}
+const struct wl_callback_listener frame_listener = { .done = frame_done };
+
+void redraw(struct cmon *mon) {
+	struct wl_callback *frame = wl_surface_frame(mon->surf);
+	wl_callback_add_listener(frame, &frame_listener, mon);
+	wl_surface_commit(mon->surf);
+}
+
 int main(int argc, char *argv[]) {
   setlocale(LC_ALL, "");
   init_rand();
@@ -265,6 +287,7 @@ int main(int argc, char *argv[]) {
 	zwlr_layer_surface_v1_set_keyboard_interactivity(state.mon.lsurf, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
 	zwlr_layer_surface_v1_set_exclusive_zone(state.mon.lsurf, barHeight);
 	wl_surface_commit(state.mon.surf);
+  wl_display_dispatch(state.dpy);
 
   while (!state.closed) {
     wl_display_dispatch(state.dpy);
