@@ -1,6 +1,8 @@
 # Deburr
 A simple dwl dwm-like status bar made for wayland using wlr
 
+![Screenshot][Deburr.png]
+
 # Configuration
 Like all suckless software all configuration is done by editing the `src/config.h` file
 
