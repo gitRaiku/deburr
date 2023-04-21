@@ -31,3 +31,6 @@ static const uint64_t colors[2][3]      = {
 	[SchemeNorm] = { col_gray3, col_gray, col_gray2 }, //minty schemenorm
 	[SchemeSel] = { col_black, col_red, col_red, }, //minty schemesel
 };
+
+static const uint8_t debug = 0;
+static const char debugf[] = "~/dlog";

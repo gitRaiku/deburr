@@ -57,6 +57,9 @@ $(BIN_DIR):
 build: $(BIN_DIR) $(PROT_OBJ_NAMES) $(BIN_DIR)/$(TARGET)
 
 run: build
+	./$(BIN_DIR)/$(TARGET) a
+
+rrun: build
 	./$(BIN_DIR)/$(TARGET)
 
 debug: build

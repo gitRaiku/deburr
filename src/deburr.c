@@ -163,7 +163,7 @@ int32_t cshmf(uint32_t size) {
     }
   } while (--retries);
   if (retries == 0) {
-    fprintf(stderr, "Could not create the shm file! [%m]\n");
+    fprintf(errf, "Could not create the shm file! [%m]\n");
     exit(1);
   }
   WLCHECKE(!shm_unlink(fnm),"Could not unlink the shm file!");
@@ -337,7 +337,7 @@ void zwlr_closed(void *data, struct zwlr_layer_surface_v1 *l) { }
 struct zwlr_layer_surface_v1_listener zwlr_listener = { .configure = zwlr_configure, .closed = zwlr_closed };
 
 void finish_init() {
-#define CHECK_INIT(x, e, v) {if (!state. x) { fputs("Your wayland compositor does not support " #e " version " #v "which is required for me to work :(\n", stderr); exit(1); }}
+#define CHECK_INIT(x, e, v) {if (!state. x) { fputs("Your wayland compositor does not support " #e " version " #v "which is required for me to work :(\n", errf); exit(1); }}
   CHECK_INIT(comp      , wl_compositor         , COMPV   );
   CHECK_INIT(shm       , wl_shm                , SHMV    );
   CHECK_INIT(zwlr      , zwlr_layer_shell_v1   , ZWLRV   );
@@ -347,7 +347,7 @@ void finish_init() {
   seatvt(&state.seats);
 
   /// TODO: Add support for multiple monitors
-  wcscpy(state.mon.status, L"This is sample text 日本語");
+  wcscpy(state.mon.status, L"New one! 日本語");
   wcscpy(state.mon.slayout, L"[M]");
   state.mon.stag = 1;
   state.mon.ctag = 1;
@@ -568,36 +568,13 @@ void utf2wwch(char *__restrict s, wchar_t *__restrict t) {
   t[tl] = L'\0';
 }
 
-void check_status(struct timespec *__restrict t) {
-  struct stat s;
-  int32_t f;
-  char *__restrict c;
-
-  if (stat(statusPath, &s) == -1) {
-    if (errno == ENOENT) {
-      fprintf(stdout, "Create file!\n");
-      f = open(statusPath, O_TMPFILE, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH);
-      close(f);
-      WLCHECK(stat(statusPath, &s) >= 0,"Could not stat the file!");
-    } else {
-      fprintf(stderr, "Could not stat %s! [%m]\n", statusPath);
-    }
-  }
-
-  if (s.st_mtim.tv_sec < t->tv_sec) {
-    return;
-  }
-  if (s.st_mtim.tv_sec == t->tv_sec && s.st_mtim.tv_nsec <= t->tv_nsec) {
-    return;
-  }
-  *t = s.st_mtim;
-  f = open(statusPath, O_RDONLY);
-  c = malloc(s.st_size + 1);
-  WLCHECK(read(f, c, s.st_size)>=0,"Could not read from the status file!\n");
-  c[s.st_size] = '\0';
-  fprintf(stdout, "Read file [%s]!\n", c);
+void check_status(int32_t fd) {
+  char c[1024];
+  int32_t rl = read(fd, c, SLEN(c));
+  WLCHECK(rl>=0,"Could not read from the status file!\n");
+  c[rl] = '\0';
+  fprintf(errf, "Read status %u[%s]!\n", rl, c);
   utf2wwch(c, state.mon.status);
-  close(f);
 }
 
 void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
@@ -609,18 +586,13 @@ void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
   static uint8_t bl[3]      = { 0 };
   static uint8_t cc = 0;
 
-  struct polerrfd p = { .fd = rfd, .events = POLLIN };
-  if (poll(&p, 1, -1) <= 0) {
-    fprintf(errf, "IGN\n");
-    return;
-  }
-  fprintf(errf, "READ\n");
-
   char cbuf[1024];
   int32_t rl = 0;
+  fprintf(errf, "BREAD\n");
   rl = read(rfd, cbuf, SLEN(cbuf));
+  fprintf(errf, "AREAD\n");
   cbuf[rl] = '\0';
-    
+
   if (rl) {
     int32_t i;
     for(i = 0; i < rl; ++i) {
@@ -649,7 +621,8 @@ void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
 }
 
 int32_t mkpip() {
-  if (mkfifo(statusPath, 0666) == 0) {
+  errno = 0;
+  if (mkfifo(statusPath, 0666) == 0 || errno == EEXIST) {
     int32_t fd = open(statusPath, O_CLOEXEC | O_NONBLOCK | O_RDONLY);
     if (fd < 0) {
       fprintf(errf, "Could not open the pipe at %s! %m\n", statusPath);
@@ -664,7 +637,44 @@ int32_t mkpip() {
 }
 
 int main(int argc, char *argv[]) {
-  errf = fopen("/home/raiku/dlog", "w");
+  if (argc > 1) {
+    if (strcmp(argv[1], "status") == 0) {
+      char a[1024] = { 0 };
+      uint32_t al = 0;
+      {
+        int32_t i;
+        uint32_t cl;
+        for(i = 2; i < argc; ++i) {
+          cl = strlen(argv[i]);
+          strncpy(a + al, argv[i], cl);
+          a[al + cl] = ' ';
+          al += cl + 1;
+        }
+        --al;
+        a[al] = '\0';
+      }
+
+      int32_t fd = open(statusPath, O_WRONLY);
+      if (fd < 0) {
+        fprintf(stderr, "Could not open %s! [%m]\n", statusPath);
+        return 1;
+      }
+      if (write(fd, a, al) < 0) {
+        fprintf(stderr, "Could not write to %s! [%m]\n", statusPath);
+        return 1;
+      }
+      close(fd);
+
+      return 0;
+    } else {
+      fprintf(stderr, "Unknown argument %s\n", argv[1]);
+    }
+  }
+  if (debug) {
+    errf = fopen(debugf, "w");
+  } else {
+    errf = fopen("/dev/null", "w");
+  }
   setbuf(errf, NULL);
   fprintf(errf, "Start deburr\n");
   setlocale(LC_ALL, "");
@@ -708,44 +718,49 @@ int main(int argc, char *argv[]) {
   WLCHECK(pipfd,"Could not create the pipe!");
   int32_t rfd = STDIN_FILENO;
 
-  struct polerrfd pfds[] = { {.fd = dpyfd, .events = POLLIN },
-                             {.fd = rfd  , .events = POLLIN }.
-                             {.fd = pipfd, .events = POLLIN } };
+  struct pollfd pfds[] = { {.fd = dpyfd, .events = POLLIN },
+                           {.fd = rfd  , .events = POLLIN },
+                           {.fd = pipfd, .events = POLLIN } };
 
   rdr = 1;
   fprintf(errf, "Started!\n");
+  render(&state.mon);
+  wl_display_dispatch(state.dpy);
+  int32_t pr;
   while (!state.closed) {
-    if (poll(pfds, SLEN(pfds), -1) < 0 && errno != EINTR) { 
+    fprintf(errf, "WAIT POLL\n");
+    pr = poll(pfds, SLEN(pfds), -1);
+    fprintf(errf, "GO POLL\n");
+    if (pr < 0 && errno != EINTR) { 
       fprintf(errf, "Could not poll for the filedescriptors! %m\n") ;
-    } else {
+    } else if (pr > 0) {
       if (pfds[0].revents & POLLIN) {
-        render(&state.mon);
+        fprintf(errf, "Got wayland events!\n");
+        rdr = 1;
         pfds[0].revents = 0; // Don't think this is necessary but some bloke on stackoverflow said it's good so here it is
       }
       if (pfds[1].revents & POLLIN) {
+        fprintf(errf, "Got dwl events!\n");
         check_dwl(rfd);
         pfds[1].revents = 0;
       }
       if (pfds[2].revents & POLLIN) {
+        fprintf(errf, "Got status events!\n");
         check_status(pipfd);
         pfds[2].revents = 0;
       }
-      wl_display_dispatch(state.dpy);
-    }
-
-
-    continue;
-    check_dwl(rfd);
-    //check_status(&la);
-    if (rdr) {
-      //fprintf(stdout, "rdr: %u %u %u\n", rdr, state.mon.stag, state.mon.ctag);
-      render(&state.mon);
-      wl_display_dispatch(state.dpy);
-      rdr = 0;
+      if (rdr) {
+        render(&state.mon);
+        wl_display_dispatch(state.dpy);
+        rdr = 0;
+      }
     }
   }
 
   close(rfd);
+  close(pipfd);
+  close(dpyfd);
+  unlink(statusPath);
   fclose(errf);
 
   return 0;
