@@ -3,6 +3,33 @@
 VECTOR_SUITE(seat, struct cseat)
 //VECTOR_SUITE(outp, struct coutp)
 
+FILE *__restrict errf;
+struct fontInfo {
+  char *fname;
+  FT_F26Dot6 xsize, ysize;  /* pixel size */
+  FcBool     aa;            /* doing antialiasing */
+  FcBool     embold;        /* force emboldening */
+  FcBool     color;         /* contains color glyphs */
+  int        rgba;          /* subpixel order */
+  int        lcd_filter;    /* lcd filter */
+  FcBool     hinting;       /* non-identify matrix? */
+  FT_Int     load_flags;    /* glyph load flags */
+
+  /*
+   * Internal fields
+   */
+  int      spacing;
+  FcBool    minspace;
+  int      cwidth;
+};
+
+struct cfont {
+  FT_Library l;
+  FT_Face face[2];
+  struct fontInfo i[2];
+};
+struct cfont fts = {0};
+
 struct cstate {
   struct wl_display *dpy;
   struct wl_registry *reg;
@@ -20,12 +47,14 @@ struct cstate {
   struct wl_surface *pSurf;
   struct cmon mon;
 
-  uint32_t lframe;
+  uint32_t errframe;
   uint32_t width, height;
   uint8_t closed;
 };
-struct cstate state;
-double ofs = 0;
+struct cstate state = {0};
+uint8_t rdr = 0;
+int32_t barHeight = 0;
+int32_t fontPadding = 0;
 
 // This section is here only because wayland refuses to allow NULL listeners, smh
 // https://gitlab.freedesktop.org/wayland/wayland/-/issues/160                   
@@ -162,36 +191,145 @@ void cbufs(struct cmon *mon, uint32_t width, uint32_t height, enum wl_shm_format
   mon->sb.height = height;
 }
 
-void render(struct cmon *mon) {
-	if (!mon->sb.b[0]) { return; }
+uint8_t lerp(uint8_t t, uint8_t o1, uint8_t o2) {
+  return (uint8_t)((double)o1 * (1.0 - ((double)t/255.0))) + (o2 * ((double)t/255.0));
+}
 
-  /* Draw checkerboxed background */
+uint64_t ablend(uint8_t t, uint64_t fc, uint64_t bc) { /// TODO: Actual alpha blending
+#define CTG(a,b,c,d) {b=((a&0xFF0000)>>16);c=((a&0x00FF00)>>8);d=((a&0x0000FF)>>0);}
+  uint8_t r1, r2, r3, g1, g2, g3, b1, b2, b3;
+  CTG(fc, r1, g1, b1);
+  CTG(bc, r2, g2, b2);
+  r3 = lerp(255 - t, r1, r2);
+  g3 = lerp(255 - t, g1, g2);
+  b3 = lerp(255 - t, b1, b2);
+  return 0xFF000000 |
+        ((uint64_t)r3 << 16) |
+        ((uint64_t)g3 <<  8) |
+        ((uint64_t)b3 <<  0);
+#undef CTG
+}
+
+void draw_char(struct cmon *mon, int32_t x, int32_t y, uint8_t cs, uint64_t fc, uint64_t bc) {
+#define CG fts.face[cs]->glyph
+#define CB fts.face[cs]->glyph->bitmap
+#define CM fts.face[cs]->glyph->metrics
+  int32_t i, j;
   uint32_t co = mon->sb.size * mon->sb.csel / 4;
-  uint32_t h = mon->sb.height;
-  uint32_t w = mon->sb.width;
-  fprintf(stdout, "Size %ux%u\n", mon->sb.width, mon->sb.height);
-  fprintf(stdout, "Coffset %u\n", co);
-  for (int y = 0; y < h; ++y) {
-    for (int x = 0; x < w; ++x) {
-      if ((x + y / 8 * 8 + (uint32_t)ofs) % 16 < 8) {
-        mon->sb.data[co + y * w + x] = 0xFF666666;
-      } else {
-        mon->sb.data[co + y * w + x] = 0xFFEEEEEE;
+  for (i = 0; i < CB.rows; ++i) {
+    if ((i + y) < 0 || mon->sb.height <= (i + y)) { /// TODO: Make fast
+      continue;
+    }
+    for (j = 0; j < CB.width; ++j) {
+      if ((j + x) < 0 || mon->sb.width <= (j + x)) { /// TODO: Make fast
+        continue;
       }
+      mon->sb.data[co + (i + y) * mon->sb.width + j + x] = ablend(CB.buffer[i * CB.pitch + j], fc, bc);
     }
   }
-  ofs += 0.5;
+}
 
-	wl_surface_attach(mon->surf, mon->sb.b[mon->sb.csel], 0, 0);
-	wl_surface_damage(mon->surf, 0, 0, mon->sb.width, mon->sb.height);
-	wl_surface_commit(mon->surf);
+void draw_rect(struct cmon *mon, uint32_t x, uint32_t y, int32_t w, int32_t h, uint64_t col) {
+  int32_t i, j;
+  uint32_t co = mon->sb.size * mon->sb.csel / 4;
+  for (i = 0; i < h; ++i) {
+    if ((i + y) < 0 || mon->sb.height <= (i + y)) { /// TODO: Make fast
+      continue;
+    }
+    for (j = 0; j < w; ++j) {
+      if ((j + x) < 0 || mon->sb.width <= (j + x)) { /// TODO: Make fast
+        continue;
+      }
+      mon->sb.data[co + (i + y) * mon->sb.width + j + x] = col;
+    }
+  }
+}
+
+int32_t draw_string(struct cmon *mon, const wchar_t *__restrict s, uint32_t x, uint32_t y, uint64_t fc, uint64_t bc, uint8_t render) { /// TODO: LCD filter
+  int32_t i;
+  int32_t px = 0;
+  uint32_t cg;
+  uint8_t cs = 0;
+  //fprintf(stdout, "Drawing %ls!\n", s);
+  uint32_t strl = wcslen(s);
+  for(i = 0; i < strl; ++i) {
+    cg = FT_Get_Char_Index(fts.face[0], s[i]); cs = 0;
+    if (cg == 0) { cg = FT_Get_Char_Index(fts.face[1], s[i]); cs = 1; }
+    FTCHECK(FT_Load_Glyph(fts.face[cs], cg, fts.i[cs].load_flags), "Could not load a glyph!");
+    FTCHECK(FT_Render_Glyph(CG, FT_RENDER_MODE_NORMAL), "Could not render a glyph!");
+
+    int32_t advance = CM.horiAdvance >> 6;
+    if (render) {
+      int32_t xoff =   CM.horiBearingX >> 6;
+      int32_t yoff = -(CM.horiBearingY >> 6);
+      draw_char(mon, x + px + xoff, y + yoff, cs, fc, bc);
+      /*draw_rect(mon, x + px + xoff, y       , CM.width >> 3, 1, 0xFF0000FF);
+      draw_rect(mon, x + px + xoff, y + yoff, CM.width >> 3, 1, 0xFFFF0000);
+      draw_rect(mon, x + px + xoff, y - (fts.face[0]->height >> 6) + 1, CM.width >> 3, 1, 0xFF00FF00);*/
+    }
+
+    px += advance; /// TODO: Kerning ?
+  }
+#undef CG
+#undef CM
+  return px;
+}
+
+void render(struct cmon *mon) {
+  if (!mon->sb.b[0]) { return; }
+  //fprintf(stdout, "RENDER TAG\n");
+
+  /* Draw checkerboxed background */
+  draw_rect(mon, 0, 0, mon->sb.width, mon->sb.height, colors[SchemeNorm][BACKG]);
+  uint32_t sl = draw_string(mon, L" ", 0, 0, 0, 0, 0);
+  {
+    //fprintf(stdout, "STAG: %u %u\n", mon->stag, mon->ctag);
+    int32_t i;
+    uint32_t px = 0;
+    uint32_t cl = 0;
+    uint32_t p2 = 1;
+    /*draw_rect(mon, 0, 0, 100, 1, 0xFFFF0000);
+    draw_rect(mon, 0, fts.face[0]->bbox.yMax >> 6, 100, 1, 0xFFFF0000);
+    draw_rect(mon, 0, fts.face[0]->bbox.yMin >> 6, 100, 1, 0xFF00FF00);
+    draw_rect(mon, 0, fts.face[0]->descender >> 6, 100, 1, 0xFF0000FF);
+    draw_rect(mon, 0, fts.face[0]->ascender  >> 6, 100, 1, 0xFFFFFF00);*/
+    //fprintf(stdout, "de: %li %li\n", fts.face[0]->bbox.yMax >> 6, fts.face[0]->bbox.yMin >> 6);
+    int32_t py = ((fts.face[0]->height + fts.face[0]->descender) >> 6) + fontPadding;
+    for(i = 0; i < 9; ++i) {
+      if (!((mon->stag & p2) || (mon->ctag & p2))) {
+        p2 <<= 1;
+        continue;
+      }
+      if (mon->ctag & p2) {
+        cl = sl * 2 + draw_string(mon, tags[i], 0, 0, 0, 0, 0);
+        draw_rect(mon, px, 0, cl, mon->sb.height, colors[SchemeSel][BACKG]);
+        px += draw_string(mon, L" "   , px, py, colors[SchemeSel][FOREG], colors[SchemeSel][BACKG], 1);
+        px += draw_string(mon, tags[i], px, py, colors[SchemeSel][FOREG], colors[SchemeSel][BACKG], 1);
+        px += draw_string(mon, L" "   , px, py, colors[SchemeSel][FOREG], colors[SchemeSel][BACKG], 1);
+      } else {
+        px += draw_string(mon, L" "   , px, py, colors[SchemeNorm][FOREG], colors[SchemeNorm][BACKG], 1);
+        px += draw_string(mon, tags[i], px, py, colors[SchemeNorm][FOREG], colors[SchemeNorm][BACKG], 1);
+        px += draw_string(mon, L" "   , px, py, colors[SchemeNorm][FOREG], colors[SchemeNorm][BACKG], 1);
+      }
+      p2 <<= 1;
+    }
+    px += draw_string(mon, L" "   , px, py, colors[SchemeSel][FOREG], colors[SchemeSel][BACKG], 1);
+    px += draw_string(mon, mon->slayout, px, py, colors[SchemeNorm][FOREG], colors[SchemeNorm][BACKG], 1);
+
+    cl = draw_string(mon, mon->status, 0, 0, 0, 0, 0) + sl;
+    draw_string(mon, mon->status, mon->sb.width - cl, py, colors[SchemeNorm][FOREG], colors[SchemeNorm][BACKG], 1);
+  }
+
+  wl_surface_attach(mon->surf, mon->sb.b[mon->sb.csel], 0, 0);
+  wl_surface_damage(mon->surf, 0, 0, mon->sb.width, mon->sb.height);
+  wl_surface_commit(mon->surf);
   mon->sb.csel = 1 - mon->sb.csel;
 }
 
 void zwlr_configure(void *data, struct zwlr_layer_surface_v1 *l, uint32_t serial, uint32_t width, uint32_t height) { 
   struct cmon *mon = data;
-	zwlr_layer_surface_v1_ack_configure(l, serial);
-	if (mon->sb.b[0] && width == mon->sb.width && height == mon->sb.height) { return; }
+  zwlr_layer_surface_v1_ack_configure(l, serial);
+  if (mon->sb.b[0] && width == mon->sb.width && height == mon->sb.height) { return; }
   cbufs(mon, width, height, WL_SHM_FORMAT_ARGB8888);
   render(mon);
 }
@@ -209,9 +347,13 @@ void finish_init() {
   seatvt(&state.seats);
 
   /// TODO: Add support for multiple monitors
+  wcscpy(state.mon.status, L"This is sample text 日本語");
+  wcscpy(state.mon.slayout, L"[M]");
+  state.mon.stag = 1;
+  state.mon.ctag = 1;
   state.mon.xout = zxdg_output_manager_v1_get_xdg_output(state.xoutmgr, state.mon.out);
   zxdg_output_v1_add_listener(state.mon.xout, &zxout_listener, &state.mon.out);
-	wl_display_roundtrip(state.dpy);
+  wl_display_roundtrip(state.dpy);
 }
 
 void reg_global(void *data, struct wl_registry *reg, uint32_t name, const char *iface, uint32_t ver) {
@@ -262,36 +404,349 @@ void frame_done(void *data, struct wl_callback *cb, uint32_t d) {
 const struct wl_callback_listener frame_listener = { .done = frame_done };
 
 void redraw(struct cmon *mon) {
-	struct wl_callback *frame = wl_surface_frame(mon->surf);
-	wl_callback_add_listener(frame, &frame_listener, mon);
-	wl_surface_commit(mon->surf);
+  struct wl_callback *frame = wl_surface_frame(mon->surf);
+  wl_callback_add_listener(frame, &frame_listener, mon);
+  wl_surface_commit(mon->surf);
+}
+
+uint8_t get_font_info(FcPattern *pattern, struct fontInfo *__restrict i) {
+#define QD(v,p,d) {switch (FcPatternGetDouble (pattern, p, 0, &v)) { case FcResultNoMatch: v = d; break; case FcResultMatch: break; default: goto fi_crash; }}
+#define QB(v,p,d) {switch (FcPatternGetBool   (pattern, p, 0, &v)) { case FcResultNoMatch: v = d; break; case FcResultMatch: break; default: goto fi_crash; }}
+#define QI(v,p,d) {switch (FcPatternGetInteger(pattern, p, 0, &v)) { case FcResultNoMatch: v = d; break; case FcResultMatch: break; default: goto fi_crash; }}
+  char *cf;
+  WLCHECK(FcPatternGetString(pattern, FC_FILE, 0, (FcChar8 **)&cf)==FcResultMatch,"Could not find a suitable font!");
+  i->fname = malloc(strlen(cf));
+  strcpy(i->fname, cf);
+  
+  double psize;
+  double aspect;
+  FcBool vl, hinting, ahint, gadv;
+  int hstyle;
+
+  WLCHECK(FcPatternGetDouble(pattern, FC_PIXEL_SIZE, 0, &psize)==FcResultMatch,"Could not get font pixel size!");
+  QB(i->aa        , FC_ANTIALIAS      , FcTrue         );
+  QI(i->rgba      , FC_RGBA           , FC_RGBA_UNKNOWN);
+  QI(i->lcd_filter, FC_LCD_FILTER     , FC_LCD_LIGHT   );
+  QB(i->embold    , FC_EMBOLDEN       , FcFalse        );
+  QI(i->spacing   , FC_SPACING        , FC_PROPORTIONAL);
+  QB(i->minspace  , FC_MINSPACE       , FcFalse        );
+  QI(i->cwidth    , FC_CHAR_WIDTH     , 0              );
+  QD(aspect       , FC_ASPECT         , 1.0            );
+  QB(hinting      , FC_HINTING        , FcTrue         );
+  QI(hstyle       , FC_HINT_STYLE     , FC_HINT_SLIGHT );
+  QB(vl           , FC_VERTICAL_LAYOUT, FcFalse        );
+  QB(ahint        , FC_AUTOHINT       , FcFalse        );
+  QB(gadv         , FC_GLOBAL_ADVANCE , FcTrue         );
+#undef QD
+#undef QB
+#undef QI
+
+  i->ysize = psize * 64.0;
+  i->xsize = psize * aspect * 64.0;
+
+  i->load_flags = FT_LOAD_DEFAULT | FT_LOAD_COLOR;
+
+  if (i->aa) { /// Code i defo didn't steal from libXft and i fully understand
+    if (FC_HINT_NONE < hstyle && hstyle < FC_HINT_FULL) {
+      i->load_flags |= FT_LOAD_TARGET_LIGHT;
+    } else {
+      switch (i->rgba) {
+      case FC_RGBA_RGB:
+      case FC_RGBA_BGR:
+        i->load_flags |= FT_LOAD_TARGET_LCD;
+        break;
+      case FC_RGBA_VRGB:
+      case FC_RGBA_VBGR:
+        i->load_flags |= FT_LOAD_TARGET_LCD_V;
+        break;
+      }
+    }
+  } else { i->load_flags |= FT_LOAD_TARGET_MONO; }
+
+  if (!hinting || hstyle == FC_HINT_NONE) { i->load_flags |= FT_LOAD_NO_HINTING; }
+  if                                 (vl) { i->load_flags |= FT_LOAD_VERTICAL_LAYOUT; }
+  if                              (ahint) { i->load_flags |= FT_LOAD_FORCE_AUTOHINT; }
+  if                              (!gadv) { i->load_flags |= FT_LOAD_IGNORE_GLOBAL_ADVANCE_WIDTH; }
+  if                       (i->cwidth) { i->spacing = FC_MONO; }
+
+  return 0;
+fi_crash:
+  return 1;
+}
+
+void print_font_info(struct fontInfo *__restrict i) { fprintf(stdout, "Got font: %s\n\tPsize: %lix%li\n\tAntialias: %u\n\tEmbold: %u\n\tColor: %u\n\tRgba: %u\n\tLcdFilter: %u\n\tHinting: %u\n\tLoadFlags: 0x%x\n\tSpacing: %x\n\tMinspace: %x\n\tChar Width: %x\n", i->fname, i->xsize, i->ysize, i->aa, i->embold, i->color, i->rgba, i->lcd_filter, i->hinting, i->load_flags, i->spacing, i->minspace, i->cwidth); }
+
+void find_font_face(const char *fname, FT_Face *face, struct fontInfo *i) {
+  FcInit(); /// Boy do i love fontconfig and all their incredible documentation
+  FcResult result;
+  FcConfig *config = FcInitLoadConfigAndFonts();
+  FcPattern *pat = FcNameParse((const FcChar8*)fname);
+  FcConfigSubstitute(config, pat, FcMatchPattern);
+  FcDefaultSubstitute(pat);
+  FcPattern *font = FcFontMatch(config, pat, &result);
+  WLCHECK(!get_font_info(font, i),"Could not get font information about the selected font!");
+  FcPatternDestroy(font);
+  FcPatternDestroy(pat);
+  FcConfigDestroy(config);
+  FcFini();
+
+  //print_font_info(i);
+  FTCHECK(FT_New_Face(fts.l, i->fname, 0, face),"Could not create a font face from the given pattern!");
+  FTCHECK(FT_Set_Char_Size(*face, 0, 16 * 64, 300, 300),"Could not set the character size!");
+  FTCHECK(FT_Set_Pixel_Sizes(*face, i->xsize >> 6, i->ysize >> 6),"Could not set the pixel size!");
+}
+
+void init_freetype() {
+  FTCHECK(FT_Init_FreeType(&fts.l),"Could not initialise the Freetype lib!");
+  find_font_face(fonts[0], fts.face, fts.i);
+  if (fonts[1][0]) {
+    find_font_face(fonts[1], fts.face + 1, fts.i + 1);
+  }
+}
+
+void upt(char *__restrict s, uint32_t sl) { /// TODO: Support multiple monitors
+  uint32_t cl = 0; 
+  state.mon.stag = 0;
+  state.mon.ctag = 0;
+  while (s[cl] != ' ' && cl < sl) {
+    state.mon.stag *= 10;
+    state.mon.stag += s[cl] - '0';
+    ++cl;
+  }
+  ++cl;
+  while (s[cl] != ' ' && cl < sl) {
+    state.mon.ctag *= 10;
+    state.mon.ctag += s[cl] - '0';
+    ++cl;
+  }
+}
+
+uint32_t runel(char *__restrict str) {
+  char *__restrict os = str;
+  for (++str; (*str & 0xc0) == 0x80; ++str);
+  return (uint32_t) (str - os);
+}
+
+uint32_t utf8_to_unicode(char *__restrict str, uint32_t l) {
+  uint32_t res = 0;
+  switch (l) {
+    case 4:
+      res |= *str & 0x7;
+      break;
+    case 3:
+      res |= *str & 0xF;
+      break;
+    case 2:
+      res |= *str & 0x1F;
+      break;
+    case 1:
+      res |= *str & 0x7F;
+      break;
+  }
+
+  --l;
+  while (l) {
+    ++str;
+    res <<= 6;
+    res |= *str & 0x3F;
+    --l;
+  }
+
+  return res;
+}
+
+void utf2wwch(char *__restrict s, wchar_t *__restrict t) {
+  uint32_t tl = 0;
+  uint32_t cl;
+  while (*s) {
+    cl = runel(s);
+    t[tl] = utf8_to_unicode(s, cl);
+    if (t[tl] == L'\n' || t[tl] == L'\r') { --tl; }
+    ++tl;
+    s += cl;
+  }
+  t[tl] = L'\0';
+}
+
+void check_status(struct timespec *__restrict t) {
+  struct stat s;
+  int32_t f;
+  char *__restrict c;
+
+  if (stat(statusPath, &s) == -1) {
+    if (errno == ENOENT) {
+      fprintf(stdout, "Create file!\n");
+      f = open(statusPath, O_TMPFILE, S_IWUSR | S_IRUSR | S_IWGRP | S_IRGRP | S_IROTH);
+      close(f);
+      WLCHECK(stat(statusPath, &s) >= 0,"Could not stat the file!");
+    } else {
+      fprintf(stderr, "Could not stat %s! [%m]\n", statusPath);
+    }
+  }
+
+  if (s.st_mtim.tv_sec < t->tv_sec) {
+    return;
+  }
+  if (s.st_mtim.tv_sec == t->tv_sec && s.st_mtim.tv_nsec <= t->tv_nsec) {
+    return;
+  }
+  *t = s.st_mtim;
+  f = open(statusPath, O_RDONLY);
+  c = malloc(s.st_size + 1);
+  WLCHECK(read(f, c, s.st_size)>=0,"Could not read from the status file!\n");
+  c[s.st_size] = '\0';
+  fprintf(stdout, "Read file [%s]!\n", c);
+  utf2wwch(c, state.mon.status);
+  close(f);
+}
+
+void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
+                              /// POLL() IS SHIT
+                              /// DOESN'T RESET
+                              /// ON READ WHAT THE
+                              /// FUCK FUCK FUCK
+  static char     b[3][256] = { 0 };
+  static uint8_t bl[3]      = { 0 };
+  static uint8_t cc = 0;
+
+  struct polerrfd p = { .fd = rfd, .events = POLLIN };
+  if (poll(&p, 1, -1) <= 0) {
+    fprintf(errf, "IGN\n");
+    return;
+  }
+  fprintf(errf, "READ\n");
+
+  char cbuf[1024];
+  int32_t rl = 0;
+  rl = read(rfd, cbuf, SLEN(cbuf));
+  cbuf[rl] = '\0';
+    
+  if (rl) {
+    int32_t i;
+    for(i = 0; i < rl; ++i) {
+      if (cbuf[i] == ' ' && cc < 2) { b[cc][bl[cc]] = '\0'; ++cc; } 
+      else if (cbuf[i] == '\n') {
+        b[cc][bl[cc]] = '\0';
+        cc = 0;
+
+        if (strcmp(b[1], "tags") == 0) {
+          upt(b[2], bl[2]);
+          rdr = 1;
+        } else if (strcmp(b[1], "layout") == 0) {
+          utf2wwch(b[2], state.mon.slayout);
+          rdr = 1;
+        }
+
+        bl[0] = bl[1] = bl[2] = 0;
+      } else {
+        b[cc][bl[cc]] = cbuf[i];
+        ++bl[cc];
+      }
+    }
+  }
+
+  if (rl == SLEN(cbuf)) { check_dwl(rfd); }
+}
+
+int32_t mkpip() {
+  if (mkfifo(statusPath, 0666) == 0) {
+    int32_t fd = open(statusPath, O_CLOEXEC | O_NONBLOCK | O_RDONLY);
+    if (fd < 0) {
+      fprintf(errf, "Could not open the pipe at %s! %m\n", statusPath);
+      exit(1);
+    }
+    return fd;
+  } else {
+    fprintf(errf, "Could not create a pipe at %s! %m\n", statusPath);
+    exit(1);
+  }
+  return 0;
 }
 
 int main(int argc, char *argv[]) {
+  errf = fopen("/home/raiku/dlog", "w");
+  setbuf(errf, NULL);
+  fprintf(errf, "Start deburr\n");
   setlocale(LC_ALL, "");
   init_rand();
+  fprintf(errf, "Init rand\n");
 
+  init_freetype();
+  fprintf(errf, "Init freetype\n");
+  barHeight = ((fts.face[0]->bbox.yMax + fts.face[0]->underline_thickness) >> 6);
+  fontPadding = barHeight * padding;
+  barHeight += fontPadding * 2;
   memset(&state, 0, sizeof(state));
+  fprintf(errf, "Before dpy\n");
   WLCHECK(state.dpy=wl_display_connect(NULL),"Could not connect to the wayland display!");
+  fprintf(errf, "Before reg\n");
   WLCHECK(state.reg=wl_display_get_registry(state.dpy),"Could not fetch the wayland registry!");
+  fprintf(errf, "Before addl\n");
   wl_registry_add_listener(state.reg, &reg_listener, NULL);
+  fprintf(errf, "Before roundrtip\n");
   wl_display_roundtrip(state.dpy);
+  fprintf(errf, "Before finish\n");
   finish_init();
 
   state.mon.surf = wl_compositor_create_surface(state.comp); WLCHECK(state.mon.surf,"Cannot create wayland surface!");
-	state.mon.lsurf = zwlr_layer_shell_v1_get_layer_surface(state.zwlr, state.mon.surf, state.mon.out, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, "Deburr"); WLCHECK(state.mon.lsurf,"Cannot create zwlr surface!");
-	zwlr_layer_surface_v1_add_listener(state.mon.lsurf, &zwlr_listener, &state.mon);
-	zwlr_layer_surface_v1_set_anchor(state.mon.lsurf, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+  state.mon.lsurf = zwlr_layer_shell_v1_get_layer_surface(state.zwlr, state.mon.surf, state.mon.out, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, "Deburr"); WLCHECK(state.mon.lsurf,"Cannot create zwlr surface!");
+  fprintf(errf, "Before zwlr\n");
+  zwlr_layer_surface_v1_add_listener(state.mon.lsurf, &zwlr_listener, &state.mon);
+  zwlr_layer_surface_v1_set_anchor(state.mon.lsurf, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
 
-	zwlr_layer_surface_v1_set_size(state.mon.lsurf, 0, barHeight);
-	zwlr_layer_surface_v1_set_keyboard_interactivity(state.mon.lsurf, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
-	zwlr_layer_surface_v1_set_exclusive_zone(state.mon.lsurf, barHeight);
-	wl_surface_commit(state.mon.surf);
+  zwlr_layer_surface_v1_set_size(state.mon.lsurf, 0, barHeight);
+  zwlr_layer_surface_v1_set_keyboard_interactivity(state.mon.lsurf, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+  zwlr_layer_surface_v1_set_exclusive_zone(state.mon.lsurf, barHeight);
+  fprintf(errf, "Before commit\n");
+  wl_surface_commit(state.mon.surf);
+  fprintf(errf, "Before dispatch\n");
   wl_display_dispatch(state.dpy);
 
+  int32_t dpyfd = wl_display_get_fd(state.dpy);
+  WLCHECK(dpyfd,"Could not get the display fd!");
+  int32_t pipfd = mkpip();
+  WLCHECK(pipfd,"Could not create the pipe!");
+  int32_t rfd = STDIN_FILENO;
+
+  struct polerrfd pfds[] = { {.fd = dpyfd, .events = POLLIN },
+                             {.fd = rfd  , .events = POLLIN }.
+                             {.fd = pipfd, .events = POLLIN } };
+
+  rdr = 1;
+  fprintf(errf, "Started!\n");
   while (!state.closed) {
-    wl_display_dispatch(state.dpy);
+    if (poll(pfds, SLEN(pfds), -1) < 0 && errno != EINTR) { 
+      fprintf(errf, "Could not poll for the filedescriptors! %m\n") ;
+    } else {
+      if (pfds[0].revents & POLLIN) {
+        render(&state.mon);
+        pfds[0].revents = 0; // Don't think this is necessary but some bloke on stackoverflow said it's good so here it is
+      }
+      if (pfds[1].revents & POLLIN) {
+        check_dwl(rfd);
+        pfds[1].revents = 0;
+      }
+      if (pfds[2].revents & POLLIN) {
+        check_status(pipfd);
+        pfds[2].revents = 0;
+      }
+      wl_display_dispatch(state.dpy);
+    }
+
+
+    continue;
+    check_dwl(rfd);
+    //check_status(&la);
+    if (rdr) {
+      //fprintf(stdout, "rdr: %u %u %u\n", rdr, state.mon.stag, state.mon.ctag);
+      render(&state.mon);
+      wl_display_dispatch(state.dpy);
+      rdr = 0;
+    }
   }
+
+  close(rfd);
+  fclose(errf);
 
   return 0;
 }

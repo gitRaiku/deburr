@@ -19,10 +19,12 @@ EX_HEADERS := $(SRC_DIR)/vecs.h $(SRC_DIR)/config.h
 DATE          := $(shell date "+%Y-%m-%d")
 COMPILE_FLAGS := -ggdb3 -Og -Wall -march=native -mtune=native -fmodulo-sched \
 					       -fstack-clash-protection -pthread -pipe \
-					       -fkeep-inline-functions -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE
-#COMPILE_FLAGS := -Ofast -ggdb3 -march=native -mtune=native -Wall -D_FORTIFY_SOURCE=2 -fmodulo-sched
+					       -fkeep-inline-functions -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE \
+								 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz \
+								 -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-4
+
 INCLUDE_FLAGS  := 
-LIBRARY_FLAGS  := -lwayland-client -lwayland-cursor
+LIBRARY_FLAGS  := -lwayland-client -lwayland-cursor -lfreetype -lfontconfig
 LD_FLAGS       := -O2
 
 xdgsh_XML      := $(PRT_DIR)/xml/xdg-shell.xml 

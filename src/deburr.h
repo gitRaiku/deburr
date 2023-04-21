@@ -5,8 +5,18 @@
 #include <unistd.h>
 #include <locale.h>
 #include <fcntl.h>
+#include <wchar.h>
+#include <poll.h>
+#include <errno.h>
+
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#include <fontconfig/fontconfig.h>
+#include <fontconfig/fcfreetype.h>
 
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/inotify.h>
 #include <linux/input.h>
 
 #include <wayland-client.h>
@@ -36,9 +46,6 @@ struct sbuf {
   uint8_t csel;
 };
 
-struct cfont {
-};
-
 struct cmon {
 	uint32_t n;
   const char *xdgname;
@@ -46,9 +53,11 @@ struct cmon {
   struct zxdg_output_v1 *xout;
   struct zwlr_layer_surface_v1 *lsurf;
   struct wl_surface *surf;
-	uint32_t tags;
+	uint32_t stag;
+	uint32_t ctag;
+  wchar_t status[1024];
+  wchar_t slayout[128];
   struct sbuf sb;
-  struct cfont font;
 };
 
 struct cseatp {
@@ -72,7 +81,9 @@ struct coutp {
 DEF_VECTOR_SUITE(seat, struct cseat)
 //DEF_VECTOR_SUITE(outp, struct coutp)
 
+#define SLEN(x) (sizeof(x)/sizeof(x[0]))
 #define FUNNIERCSTRING(x) #x
 #define FUNNYCSTRING(x) FUNNIERCSTRING(x)
-#define WLCHECK(x,e) {if(!(x)){fputs("Error running " #x " on " __FILE__ ":" FUNNYCSTRING(__LINE__) ": " e "\n", stderr); exit(1);}}
-#define WLCHECKE(x,e) {if(!(x)){fprintf(stderr, "Error running " #x " on " __FILE__ ":" FUNNYCSTRING(__LINE__) ": " e " [%m]\n"); exit(1);}}
+#define WLCHECK(x,e) {if(!(x)){fputs("Error running " #x " on " __FILE__ ":" FUNNYCSTRING(__LINE__) ": " e "\n", lf); exit(1);}}
+#define WLCHECKE(x,e) {if(!(x)){fprintf(lf, "Error running " #x " on " __FILE__ ":" FUNNYCSTRING(__LINE__) ": " e " [%m]\n"); exit(1);}}
+#define FTCHECK(x,e) {uint32_t err=x;if(err){fprintf(lf,"Freetype error: %s %u:[%s]!\n",e,err,FT_Error_String(err)); exit(1);}}
