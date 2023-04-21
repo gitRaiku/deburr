@@ -217,7 +217,7 @@ void draw_char(struct cmon *mon, int32_t x, int32_t y, uint8_t cs, uint64_t fc, 
   int32_t i, j;
   uint32_t co = mon->sb.size * mon->sb.csel / 4;
   for (i = 0; i < CB.rows; ++i) {
-    if ((i + y) < 0 || mon->sb.height <= (i + y)) { /// TODO: Make fast
+    if ((i + y) < 0 || mon->sb.height <= (i + y)) { /// TODO: Make fast (I'll prolly never do this :3)
       continue;
     }
     for (j = 0; j < CB.width; ++j) {
@@ -347,8 +347,8 @@ void finish_init() {
   seatvt(&state.seats);
 
   /// TODO: Add support for multiple monitors
-  wcscpy(state.mon.status, L"New one! 日本語");
-  wcscpy(state.mon.slayout, L"[M]");
+  wcscpy(state.mon.status, L"");
+  wcscpy(state.mon.slayout, L"[None]");
   state.mon.stag = 1;
   state.mon.ctag = 1;
   state.mon.xout = zxdg_output_manager_v1_get_xdg_output(state.xoutmgr, state.mon.out);
@@ -499,7 +499,7 @@ void find_font_face(const char *fname, FT_Face *face, struct fontInfo *i) {
 void init_freetype() {
   FTCHECK(FT_Init_FreeType(&fts.l),"Could not initialise the Freetype lib!");
   find_font_face(fonts[0], fts.face, fts.i);
-  if (fonts[1][0]) {
+  if (fonts[1]) {
     find_font_face(fonts[1], fts.face + 1, fts.i + 1);
   }
 }

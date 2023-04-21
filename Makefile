@@ -56,10 +56,10 @@ $(BIN_DIR):
 
 build: $(BIN_DIR) $(PROT_OBJ_NAMES) $(BIN_DIR)/$(TARGET)
 
-run: build
-	./$(BIN_DIR)/$(TARGET) a
+install: build
+	cp $(BIN_DIR)/$(TARGET) /usr/local/bin/$(TARGET)
 
-rrun: build
+run: build
 	./$(BIN_DIR)/$(TARGET)
 
 debug: build
