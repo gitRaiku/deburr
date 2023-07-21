@@ -747,28 +747,25 @@ int main(int argc, char *argv[]) {
         --al;
         a[al] = '\0';
       }
-      LOG(0, "got %s\n", a);
 
       struct stat s;
       if (stat(statusPath, &s)) {
         fprintf(stderr, "Stat %m!\n");
       }
       int32_t fd = open(statusPath, O_WRONLY);
-      LOG(0, "got %s\n", a);
       if (fd < 0) {
-        LOG(0, "Could not open %s! [%m]\n", statusPath);
+        fprintf(stderr, "Could not open %s! [%m]\n", statusPath);
         return 1;
       }
-      LOG(0, "wrigin %s\n", a);
       if (write(fd, a, al) < 0) {
-        LOG(0, "Could not write to %s! [%m]\n", statusPath);
+        fprintf(stderr, "Could not write to %s! [%m]\n", statusPath);
         return 1;
       }
       close(fd);
 
       return 0;
     } else {
-      LOG(0, "Unknown argument %s\n", argv[1]);
+      fprintf(stderr, "Unknown argument %s\n", argv[1]);
     }
     return 0;
   }
