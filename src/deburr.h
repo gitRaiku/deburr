@@ -8,6 +8,7 @@
 #include <wchar.h>
 #include <poll.h>
 #include <errno.h>
+#include <math.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -81,9 +82,10 @@ struct coutp {
 DEF_VECTOR_SUITE(seat, struct cseat)
 //DEF_VECTOR_SUITE(outp, struct coutp)
 
+#define LOG(imp,...) {if (log_level <= imp) {fprintf(errf, __VA_ARGS__);}}
 #define SLEN(x) (sizeof(x)/sizeof(x[0]))
 #define FUNNIERCSTRING(x) #x
 #define FUNNYCSTRING(x) FUNNIERCSTRING(x)
-#define WLCHECK(x,e) {if(!(x)){fputs("Error running " #x " on " __FILE__ ":" FUNNYCSTRING(__LINE__) ": " e "\n", errf); exit(1);}}
-#define WLCHECKE(x,e) {if(!(x)){fprintf(errf, "Error running " #x " on " __FILE__ ":" FUNNYCSTRING(__LINE__) ": " e " [%m]\n"); exit(1);}}
-#define FTCHECK(x,e) {uint32_t err=x;if(err){fprintf(errf,"Freetype error: %s %u:[%s]!\n",e,err,FT_Error_String(err)); exit(1);}}
+#define WLCHECK(x,e) {if(!(x)){LOG(10, "Error running " #x " on " __FILE__ ":" FUNNYCSTRING(__LINE__) ": " e "\n"); exit(1);}}
+#define WLCHECKE(x,e) {if(!(x)){LOG(10, "Error running " #x " on " __FILE__ ":" FUNNYCSTRING(__LINE__) ": " e " [%m]\n"); exit(1);}}
+#define FTCHECK(x,e) {uint32_t err=x;if(err){LOG(10, "Freetype error: %s %u:[%s]!\n",e,err,FT_Error_String(err)); exit(1);}}

@@ -24,7 +24,7 @@ COMPILE_FLAGS := -ggdb3 -Og -Wall -march=native -mtune=native -fmodulo-sched \
 								 -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-4
 
 INCLUDE_FLAGS  := 
-LIBRARY_FLAGS  := -lwayland-client -lwayland-cursor -lfreetype -lfontconfig
+LIBRARY_FLAGS  := -lwayland-client -lwayland-cursor -lfreetype -lfontconfig -lm
 LD_FLAGS       := -O2
 
 xdgsh_XML      := $(PRT_DIR)/xml/xdg-shell.xml 

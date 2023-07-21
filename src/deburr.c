@@ -47,9 +47,9 @@ struct cstate {
   struct wl_surface *pSurf;
   struct cmon mon;
 
-  uint32_t errframe;
   uint32_t width, height;
   uint8_t closed;
+  uint32_t tlen[9]; // Length in px of every tag icon
 };
 struct cstate state = {0};
 uint8_t rdr = 0;
@@ -79,6 +79,7 @@ const struct xdg_wm_base_listener xwmb_listener = { .ping = xwmb_ping };
 void p_enter(void *data, struct wl_pointer *ptr, uint32_t serial, struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y) {
   struct cseat *seat = data;
   seat->p.fmon = &state.mon; // TODO: getCurrentMonitor for multiple monitors
+  seat->p.cpres = 0;
   if (!state.pImg) {
     struct wl_cursor_theme *cth = wl_cursor_theme_load(NULL, 32, state.shm);
     state.pImg = wl_cursor_theme_get_cursor(cth, "left_ptr")->images[0];
@@ -91,6 +92,7 @@ void p_enter(void *data, struct wl_pointer *ptr, uint32_t serial, struct wl_surf
 
 void p_leave(void *data, struct wl_pointer *ptr, uint32_t serial, struct wl_surface *surf) {
   struct cseat *seat = data;
+  seat->p.x = seat->p.y = seat->p.cpres = 0;
   seat->p.fmon = NULL;
 }
 
@@ -102,8 +104,15 @@ void p_motion(void *data, struct wl_pointer *ptr, uint32_t time, wl_fixed_t x, w
 
 void p_button(void *data, struct wl_pointer *ptr, uint32_t serial, uint32_t time, uint32_t button, uint32_t pressed) {
   struct cseat *seat = data;
+  uint8_t cp = pressed == WL_POINTER_BUTTON_STATE_PRESSED;
   if (button == BTN_LEFT) {
-    seat->p.cpres = (pressed == WL_POINTER_BUTTON_STATE_PRESSED);
+    LOG(0, "Pressing: %u %u -> ", seat->p.cpres, cp);
+    if (seat->p.cpres && cp) {
+      seat->p.cpres = 2;
+    } else {
+      seat->p.cpres = cp;
+    }
+    LOG(0, "%u\n", seat->p.cpres);
   }
 }
 
@@ -112,12 +121,28 @@ void p_frame(void *data, struct wl_pointer *ptr) {
   if (!seat->p.fmon) {
     return;
   }
-  /// TODO: HANDLE INPUT
-  /*
-  for (auto btn : seat.pointer->btns) {
-    mon->bar.click(mon, seat.pointer->x, seat.pointer->y, btn);
+  uint32_t px = 0;
+  uint32_t cp = 0;
+  uint32_t p2 = 1;
+  int32_t i;
+  if (seat->p.cpres == 1) {
+    seat->p.cpres = 2;
+    LOG(0, "Handle clik at %u!\n", seat->p.x);
+    for(i = 0; i < 9; ++i) {
+      if (!((seat->p.fmon->stag & p2) || (seat->p.fmon->ctag & p2))) {
+        p2 <<= 1;
+        continue;
+      }
+      cp = state.tlen[i];
+      if (px <= seat->p.x && seat->p.x < px + cp) {
+        LOG(0, "Got at %i\n", i);
+        break;
+      }
+
+      px += cp;
+      p2 <<= 1;
+    }
   }
-  seat.pointer->btns.clear();*/
 }
 
 const struct wl_pointer_listener pointer_listener = { .enter = p_enter, .leave = p_leave, .motion = p_motion, .button = p_button, .frame = p_frame, .axis = p_axis, .axis_source = p_axis_source, .axis_stop = p_axis_stop, .axis_discrete = p_axis_discrete };
@@ -127,7 +152,7 @@ void seat_caps(void *data, struct wl_seat *s, uint32_t caps) {
   uint8_t hasPointer = caps & WL_SEAT_CAPABILITY_POINTER;
   if (!seat->p.p && hasPointer) {
     seat->p.p = wl_seat_get_pointer(seat->s);
-    wl_pointer_add_listener(seat->p.p, &pointer_listener, &seat);
+    wl_pointer_add_listener(seat->p.p, &pointer_listener, seat);
   }
 }
 const struct wl_seat_listener seat_listener = { .capabilities = seat_caps, .name = seat_name };
@@ -156,14 +181,14 @@ int32_t cshmf(uint32_t size) {
   uint32_t retries = 100;
   do {
     gname(fnm);
-    //fprintf(stdout, "%s\n", fnm);
+    //LOG(0, "%s\n", fnm);
     fd = shm_open(fnm, O_RDWR | O_CREAT | O_EXCL, 0600);
     if (fd >= 0) {
       break;
     }
   } while (--retries);
   if (retries == 0) {
-    fprintf(errf, "Could not create the shm file! [%m]\n");
+    LOG(0, "Could not create the shm file! [%m]\n");
     exit(1);
   }
   WLCHECKE(!shm_unlink(fnm),"Could not unlink the shm file!");
@@ -191,22 +216,50 @@ void cbufs(struct cmon *mon, uint32_t width, uint32_t height, enum wl_shm_format
   mon->sb.height = height;
 }
 
-uint8_t lerp(uint8_t t, uint8_t o1, uint8_t o2) {
-  return (uint8_t)((double)o1 * (1.0 - ((double)t/255.0))) + (o2 * ((double)t/255.0));
-}
+double __inline__ lerp(double t, double o1, double o2) { return (o1 * (1.0 - t)) + (o2 * t); }
 
-uint64_t ablend(uint8_t t, uint64_t fc, uint64_t bc) { /// TODO: Actual alpha blending
-#define CTG(a,b,c,d) {b=((a&0xFF0000)>>16);c=((a&0x00FF00)>>8);d=((a&0x0000FF)>>0);}
-  uint8_t r1, r2, r3, g1, g2, g3, b1, b2, b3;
+uint64_t ablend(uint64_t bcol, uint64_t fc, uint64_t bc) { /// Why has god forsaken me
+#define CTG(a,b,c,d) {b=(double)((a&0xFF0000)>>16)/255.0;c=(double)((a&0x00FF00)>>8)/255.0;d=(double)((a&0x0000FF)>>0)/255.0;}
+  double r1, r2, r3, g1, g2, g3, b1, b2, b3;
   CTG(fc, r1, g1, b1);
   CTG(bc, r2, g2, b2);
-  r3 = lerp(255 - t, r1, r2);
-  g3 = lerp(255 - t, g1, g2);
-  b3 = lerp(255 - t, b1, b2);
-  return 0xFF000000 |
-        ((uint64_t)r3 << 16) |
-        ((uint64_t)g3 <<  8) |
-        ((uint64_t)b3 <<  0);
+  CTG(bcol, r3, g3, b3);
+  r3 = (r1 * r3 + r2 * (1 - r3)) * 255.0;
+  g3 = (g1 * g3 + g2 * (1 - g3)) * 255.0;
+  b3 = (b1 * b3 + b2 * (1 - b3)) * 255.0;
+  /*
+
+  a1 = blend;
+  a2 = 1.0;
+
+  double a3 = a1 + a2 * (1 - a1);
+
+  double a1p = a1            / a3;
+  double a2p = a2 * (1 - a1) / a3;
+  r3 = (r1 * a1p + r2 * a2p) * 255.0;
+  g3 = (g1 * a1p + g2 * a2p) * 255.0;
+  b3 = (b1 * a1p + b2 * a2p) * 255.0;
+
+  a3 = 255;*/
+
+  return ((uint64_t)255 << 24) |
+         ((uint64_t)r3 << 16) |
+         ((uint64_t)g3 <<  8) |
+         ((uint64_t)b3 <<  0);
+#undef CTG
+}
+
+uint64_t gcor(uint64_t c, double gc) {
+#define CTG(a,x,b,c,d) {x=(double)((a&0xFF000000)>>24)/255.0;b=(double)((a&0xFF0000)>>16)/255.0;c=(double)((a&0x00FF00)>>8)/255.0;d=(double)((a&0x0000FF)>>0)/255.0;}
+  double a, r, g, b;
+  CTG(c, a, r, g, b);
+  r = pow(r, gc) * 255.0;
+  g = pow(g, gc) * 255.0;
+  b = pow(b, gc) * 255.0;
+  return ((uint64_t)a << 24) |
+         ((uint64_t)r << 16) |
+         ((uint64_t)g <<  8) |
+         ((uint64_t)b <<  0);
 #undef CTG
 }
 
@@ -214,17 +267,29 @@ void draw_char(struct cmon *mon, int32_t x, int32_t y, uint8_t cs, uint64_t fc, 
 #define CG fts.face[cs]->glyph
 #define CB fts.face[cs]->glyph->bitmap
 #define CM fts.face[cs]->glyph->metrics
+#define G(a,y,x,w) ((a)[((y)*(w))+(x)])
   int32_t i, j;
+  uint64_t col;
+  uint32_t cw = CB.width;
   uint32_t co = mon->sb.size * mon->sb.csel / 4;
+  if (CB.pixel_mode == FT_PIXEL_MODE_LCD) {
+    cw /= 3;
+  }
+  //fprintf(stdout, "%u %u %u %u\n", CB.width, CB.pitch, CB.pixel_mode, cw);
   for (i = 0; i < CB.rows; ++i) {
-    if ((i + y) < 0 || mon->sb.height <= (i + y)) { /// TODO: Make fast (I'll prolly never do this :3)
+    if ((i + y) < 0 || mon->sb.height <= (i + y)) {
       continue;
     }
-    for (j = 0; j < CB.width; ++j) {
-      if ((j + x) < 0 || mon->sb.width <= (j + x)) { /// TODO: Make fast
+    for (j = 0; j < cw; ++j) {
+      if ((j + x) < 0 || mon->sb.width <= (j + x)) {
         continue;
       }
-      mon->sb.data[co + (i + y) * mon->sb.width + j + x] = ablend(CB.buffer[i * CB.pitch + j], fc, bc);
+      if (CB.pixel_mode == FT_PIXEL_MODE_LCD) {
+        col = 0xFF000000 | ((uint64_t)CB.buffer[i * CB.pitch + j * 3] << 16) | ((uint64_t)CB.buffer[i * CB.pitch + j * 3 + 1] << 8) | ((uint64_t)CB.buffer[i * CB.pitch + j * 3 + 2]);
+      } else {
+        col = 0xFF000000 | ((uint64_t)CB.buffer[i * CB.pitch + j] << 16) | ((uint64_t)CB.buffer[i * CB.pitch + j] << 8) | ((uint64_t)CB.buffer[i * CB.pitch + j]);
+      }
+      G(mon->sb.data + co, i + y, j + x, mon->sb.width) = ablend(gcor(col, gammaCorrections[cs]), fc, bc);
     }
   }
 }
@@ -245,30 +310,50 @@ void draw_rect(struct cmon *mon, uint32_t x, uint32_t y, int32_t w, int32_t h, u
   }
 }
 
-int32_t draw_string(struct cmon *mon, const wchar_t *__restrict s, uint32_t x, uint32_t y, uint64_t fc, uint64_t bc, uint8_t render) { /// TODO: LCD filter
+int32_t draw_string(struct cmon *mon, const wchar_t *__restrict s, uint32_t x, uint32_t y, uint64_t fc, uint64_t bc, uint8_t render) {
   int32_t i;
   int32_t px = 0;
   uint32_t cg;
   uint8_t cs = 0;
-  //fprintf(stdout, "Drawing %ls!\n", s);
   uint32_t strl = wcslen(s);
+  uint8_t pvt = 0;
+  uint32_t pv = 0;
+  FT_Vector kerning;
+
   for(i = 0; i < strl; ++i) {
     cg = FT_Get_Char_Index(fts.face[0], s[i]); cs = 0;
     if (cg == 0) { cg = FT_Get_Char_Index(fts.face[1], s[i]); cs = 1; }
     FTCHECK(FT_Load_Glyph(fts.face[cs], cg, fts.i[cs].load_flags), "Could not load a glyph!");
-    FTCHECK(FT_Render_Glyph(CG, FT_RENDER_MODE_NORMAL), "Could not render a glyph!");
 
-    int32_t advance = CM.horiAdvance >> 6;
+    FTCHECK(FT_Render_Glyph(CG, FT_RENDER_MODE_LCD), "Could not render a glyph!");
+
+    /*if (fts.i[cs].lcd_filter && LCD) {
+      FTCHECK(FT_Render_Glyph(CG, FT_RENDER_MODE_LCD), "Could not render a glyph!");
+    } else {
+      FTCHECK(FT_Render_Glyph(CG, FT_RENDER_MODE_LIGHT), "Could not render a glyph!");
+    }*/
+
     if (render) {
       int32_t xoff =   CM.horiBearingX >> 6;
       int32_t yoff = -(CM.horiBearingY >> 6);
+      //fprintf(stdout, "Drawing %lc with %u\n", s[i], fts.i[cs].lcd_filter);
       draw_char(mon, x + px + xoff, y + yoff, cs, fc, bc);
-      /*draw_rect(mon, x + px + xoff, y       , CM.width >> 3, 1, 0xFF0000FF);
-      draw_rect(mon, x + px + xoff, y + yoff, CM.width >> 3, 1, 0xFFFF0000);
-      draw_rect(mon, x + px + xoff, y - (fts.face[0]->height >> 6) + 1, CM.width >> 3, 1, 0xFF00FF00);*/
+      //draw_rect(mon, x + px, y, CM.horiAdvance >> 6, 1, 0xFFFF0000);
     }
 
-    px += advance; /// TODO: Kerning ?
+    if (i > 0 && (pvt == cs) && FT_HAS_KERNING(fts.face[cs])) {
+      FTCHECK(FT_Get_Kerning(fts.face[cs], pv, cg, FT_KERNING_DEFAULT, &kerning),"Could not get kerning for the given fonts");
+      /*
+      if (render) {
+        fprintf(stdout, "AAAAAA\n");
+        draw_rect(mon, x + px, y + 1, kerning.x >> 6, 1, 0xFFFF0000);
+      }*/
+      px += kerning.x >> 6;
+    } else {
+      px += CM.horiAdvance >> 6;
+    }
+    pvt = cs;
+    pv = cg;
   }
 #undef CG
 #undef CM
@@ -277,23 +362,16 @@ int32_t draw_string(struct cmon *mon, const wchar_t *__restrict s, uint32_t x, u
 
 void render(struct cmon *mon) {
   if (!mon->sb.b[0]) { return; }
-  //fprintf(stdout, "RENDER TAG\n");
+  //LOG(0, "RENDER TAG\n");
 
   /* Draw checkerboxed background */
   draw_rect(mon, 0, 0, mon->sb.width, mon->sb.height, colors[SchemeNorm][BACKG]);
-  uint32_t sl = draw_string(mon, L" ", 0, 0, 0, 0, 0);
   {
-    //fprintf(stdout, "STAG: %u %u\n", mon->stag, mon->ctag);
+    //LOG(0, "STAG: %u %u\n", mon->stag, mon->ctag);
     int32_t i;
     uint32_t px = 0;
     uint32_t cl = 0;
     uint32_t p2 = 1;
-    /*draw_rect(mon, 0, 0, 100, 1, 0xFFFF0000);
-    draw_rect(mon, 0, fts.face[0]->bbox.yMax >> 6, 100, 1, 0xFFFF0000);
-    draw_rect(mon, 0, fts.face[0]->bbox.yMin >> 6, 100, 1, 0xFF00FF00);
-    draw_rect(mon, 0, fts.face[0]->descender >> 6, 100, 1, 0xFF0000FF);
-    draw_rect(mon, 0, fts.face[0]->ascender  >> 6, 100, 1, 0xFFFFFF00);*/
-    //fprintf(stdout, "de: %li %li\n", fts.face[0]->bbox.yMax >> 6, fts.face[0]->bbox.yMin >> 6);
     int32_t py = ((fts.face[0]->height + fts.face[0]->descender) >> 6) + fontPadding;
     for(i = 0; i < 9; ++i) {
       if (!((mon->stag & p2) || (mon->ctag & p2))) {
@@ -301,7 +379,7 @@ void render(struct cmon *mon) {
         continue;
       }
       if (mon->ctag & p2) {
-        cl = sl * 2 + draw_string(mon, tags[i], 0, 0, 0, 0, 0);
+        cl = state.tlen[i];
         draw_rect(mon, px, 0, cl, mon->sb.height, colors[SchemeSel][BACKG]);
         px += draw_string(mon, L" "   , px, py, colors[SchemeSel][FOREG], colors[SchemeSel][BACKG], 1);
         px += draw_string(mon, tags[i], px, py, colors[SchemeSel][FOREG], colors[SchemeSel][BACKG], 1);
@@ -316,7 +394,7 @@ void render(struct cmon *mon) {
     px += draw_string(mon, L" "   , px, py, colors[SchemeSel][FOREG], colors[SchemeSel][BACKG], 1);
     px += draw_string(mon, mon->slayout, px, py, colors[SchemeNorm][FOREG], colors[SchemeNorm][BACKG], 1);
 
-    cl = draw_string(mon, mon->status, 0, 0, 0, 0, 0) + sl;
+    cl = draw_string(mon, mon->status, 0, 0, 0, 0, 0) + draw_string(mon, L" ", 0, 0, 0, 0, 0);
     draw_string(mon, mon->status, mon->sb.width - cl, py, colors[SchemeNorm][FOREG], colors[SchemeNorm][BACKG], 1);
   }
 
@@ -337,7 +415,7 @@ void zwlr_closed(void *data, struct zwlr_layer_surface_v1 *l) { }
 struct zwlr_layer_surface_v1_listener zwlr_listener = { .configure = zwlr_configure, .closed = zwlr_closed };
 
 void finish_init() {
-#define CHECK_INIT(x, e, v) {if (!state. x) { fputs("Your wayland compositor does not support " #e " version " #v "which is required for me to work :(\n", errf); exit(1); }}
+#define CHECK_INIT(x, e, v) {if (!state. x) { LOG(10, "Your wayland compositor does not support " #e " version " #v "which is required for me to work :(\n"); exit(1); }}
   CHECK_INIT(comp      , wl_compositor         , COMPV   );
   CHECK_INIT(shm       , wl_shm                , SHMV    );
   CHECK_INIT(zwlr      , zwlr_layer_shell_v1   , ZWLRV   );
@@ -347,10 +425,20 @@ void finish_init() {
   seatvt(&state.seats);
 
   /// TODO: Add support for multiple monitors
-  wcscpy(state.mon.status, L"");
-  wcscpy(state.mon.slayout, L"[None]");
-  state.mon.stag = 1;
-  state.mon.ctag = 1;
+  {
+    int32_t i;
+    uint32_t sl = draw_string(&state.mon, L" ", 0, 0, 0, 0, 0);
+    for(i = 0; i < 9; ++i) {
+      state.tlen[i] = sl * 2 + draw_string(&state.mon, tags[i], 0, 0, 0, 0, 0);
+      LOG(0, "Len ticon %i = %u\n", i, state.tlen[i]);
+    }
+  }
+
+ 
+  wcscpy(state.mon.status, L"いのちの食べ方 : Eve │ 17/05/2023 10:37 │ 15%-");
+  wcscpy(state.mon.slayout, L"[M]");
+  state.mon.stag = 1|2|8|32;
+  state.mon.ctag = 4;
   state.mon.xout = zxdg_output_manager_v1_get_xdg_output(state.xoutmgr, state.mon.out);
   zxdg_output_v1_add_listener(state.mon.xout, &zxout_listener, &state.mon.out);
   wl_display_roundtrip(state.dpy);
@@ -359,8 +447,6 @@ void finish_init() {
 void reg_global(void *data, struct wl_registry *reg, uint32_t name, const char *iface, uint32_t ver) {
 #define CHI(x,y,z,w) {if(!strcmp(iface,y .name)) {state. x=wl_registry_bind(reg, name, &y, z);w;return;}}
 #define CHV(x,y,z,w) {if(!strcmp(iface,y .name)) {x cbind=wl_registry_bind(reg, name, &y, z);w;return;}}
-
-  seatvi(&state.seats);
 
   CHI(comp           , wl_compositor_interface         , COMPV,);
   CHI(shm            , wl_shm_interface                , SHMV,);
@@ -474,7 +560,7 @@ fi_crash:
   return 1;
 }
 
-void print_font_info(struct fontInfo *__restrict i) { fprintf(stdout, "Got font: %s\n\tPsize: %lix%li\n\tAntialias: %u\n\tEmbold: %u\n\tColor: %u\n\tRgba: %u\n\tLcdFilter: %u\n\tHinting: %u\n\tLoadFlags: 0x%x\n\tSpacing: %x\n\tMinspace: %x\n\tChar Width: %x\n", i->fname, i->xsize, i->ysize, i->aa, i->embold, i->color, i->rgba, i->lcd_filter, i->hinting, i->load_flags, i->spacing, i->minspace, i->cwidth); }
+void print_font_info(struct fontInfo *__restrict i) { LOG(0, "Got font: %s\n\tPsize: %lix%li\n\tAntialias: %u\n\tEmbold: %u\n\tColor: %u\n\tRgba: %u\n\tLcdFilter: %u\n\tHinting: %u\n\tLoadFlags: 0x%x\n\tSpacing: %x\n\tMinspace: %x\n\tChar Width: %x\n", i->fname, i->xsize, i->ysize, i->aa, i->embold, i->color, i->rgba, i->lcd_filter, i->hinting, i->load_flags, i->spacing, i->minspace, i->cwidth); }
 
 void find_font_face(const char *fname, FT_Face *face, struct fontInfo *i) {
   FcInit(); /// Boy do i love fontconfig and all their incredible documentation
@@ -573,7 +659,7 @@ void check_status(int32_t fd) {
   int32_t rl = read(fd, c, SLEN(c));
   WLCHECK(rl>=0,"Could not read from the status file!\n");
   c[rl] = '\0';
-  fprintf(errf, "Read status %u[%s]!\n", rl, c);
+  LOG(0, "Read status %u[%s]!\n", rl, c);
   utf2wwch(c, state.mon.status);
 }
 
@@ -588,9 +674,9 @@ void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
 
   char cbuf[1024];
   int32_t rl = 0;
-  fprintf(errf, "BREAD\n");
+  LOG(0, "BREAD\n");
   rl = read(rfd, cbuf, SLEN(cbuf));
-  fprintf(errf, "AREAD\n");
+  LOG(0, "AREAD\n");
   cbuf[rl] = '\0';
 
   if (rl) {
@@ -607,6 +693,9 @@ void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
         } else if (strcmp(b[1], "layout") == 0) {
           utf2wwch(b[2], state.mon.slayout);
           rdr = 1;
+        } else if (strcmp(b[1], "debug") == 0) {
+          upt(b[2], bl[2]);
+          rdr = 1;
         }
 
         bl[0] = bl[1] = bl[2] = 0;
@@ -620,17 +709,22 @@ void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
   if (rl == SLEN(cbuf)) { check_dwl(rfd); }
 }
 
-int32_t mkpip() {
+int32_t mkpip(int32_t *wfd) {
   errno = 0;
   if (mkfifo(statusPath, 0666) == 0 || errno == EEXIST) {
     int32_t fd = open(statusPath, O_CLOEXEC | O_NONBLOCK | O_RDONLY);
     if (fd < 0) {
-      fprintf(errf, "Could not open the pipe at %s! %m\n", statusPath);
+      LOG(10, "Could not open the pipe at %s! %m\n", statusPath);
+      exit(1);
+    }
+    *wfd = open(statusPath, O_CLOEXEC | O_WRONLY);
+    if (*wfd < 0) {
+      LOG(10, "Could not open the pipe at %s for writing! %m\n", statusPath);
       exit(1);
     }
     return fd;
   } else {
-    fprintf(errf, "Could not create a pipe at %s! %m\n", statusPath);
+    LOG(10, "Could not create a pipe at %s! %m\n", statusPath);
     exit(1);
   }
   return 0;
@@ -653,68 +747,79 @@ int main(int argc, char *argv[]) {
         --al;
         a[al] = '\0';
       }
+      LOG(0, "got %s\n", a);
 
+      struct stat s;
+      if (stat(statusPath, &s)) {
+        fprintf(stderr, "Stat %m!\n");
+      }
       int32_t fd = open(statusPath, O_WRONLY);
+      LOG(0, "got %s\n", a);
       if (fd < 0) {
-        fprintf(stderr, "Could not open %s! [%m]\n", statusPath);
+        LOG(0, "Could not open %s! [%m]\n", statusPath);
         return 1;
       }
+      LOG(0, "wrigin %s\n", a);
       if (write(fd, a, al) < 0) {
-        fprintf(stderr, "Could not write to %s! [%m]\n", statusPath);
+        LOG(0, "Could not write to %s! [%m]\n", statusPath);
         return 1;
       }
       close(fd);
 
       return 0;
     } else {
-      fprintf(stderr, "Unknown argument %s\n", argv[1]);
+      LOG(0, "Unknown argument %s\n", argv[1]);
     }
+    return 0;
   }
-  if (debug) {
+  if (debugf[0]) {
     errf = fopen(debugf, "w");
   } else {
-    errf = fopen("/dev/null", "w");
+    errf = stderr;
   }
   setbuf(errf, NULL);
-  fprintf(errf, "Start deburr\n");
+  LOG(0, "Start deburr\n");
   setlocale(LC_ALL, "");
   init_rand();
-  fprintf(errf, "Init rand\n");
+  LOG(0, "Init rand\n");
 
   init_freetype();
-  fprintf(errf, "Init freetype\n");
+  LOG(0, "Init freetype\n");
   barHeight = ((fts.face[0]->bbox.yMax + fts.face[0]->underline_thickness) >> 6);
   fontPadding = barHeight * padding;
   barHeight += fontPadding * 2;
   memset(&state, 0, sizeof(state));
-  fprintf(errf, "Before dpy\n");
+  LOG(0, "Before dpy\n");
   WLCHECK(state.dpy=wl_display_connect(NULL),"Could not connect to the wayland display!");
-  fprintf(errf, "Before reg\n");
+  LOG(0, "Before reg\n");
   WLCHECK(state.reg=wl_display_get_registry(state.dpy),"Could not fetch the wayland registry!");
-  fprintf(errf, "Before addl\n");
+  LOG(0, "Before addl\n");
+  seatvi(&state.seats);
   wl_registry_add_listener(state.reg, &reg_listener, NULL);
-  fprintf(errf, "Before roundrtip\n");
+  LOG(0, "Before roundrtip\n");
   wl_display_roundtrip(state.dpy);
-  fprintf(errf, "Before finish\n");
+  LOG(0, "Before finish\n");
   finish_init();
 
   state.mon.surf = wl_compositor_create_surface(state.comp); WLCHECK(state.mon.surf,"Cannot create wayland surface!");
   state.mon.lsurf = zwlr_layer_shell_v1_get_layer_surface(state.zwlr, state.mon.surf, state.mon.out, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, "Deburr"); WLCHECK(state.mon.lsurf,"Cannot create zwlr surface!");
-  fprintf(errf, "Before zwlr\n");
+  LOG(0, "Before zwlr\n");
   zwlr_layer_surface_v1_add_listener(state.mon.lsurf, &zwlr_listener, &state.mon);
   zwlr_layer_surface_v1_set_anchor(state.mon.lsurf, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
 
   zwlr_layer_surface_v1_set_size(state.mon.lsurf, 0, barHeight);
   zwlr_layer_surface_v1_set_keyboard_interactivity(state.mon.lsurf, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
   zwlr_layer_surface_v1_set_exclusive_zone(state.mon.lsurf, barHeight);
-  fprintf(errf, "Before commit\n");
+  LOG(0, "Before commit\n");
   wl_surface_commit(state.mon.surf);
-  fprintf(errf, "Before dispatch\n");
+  LOG(0, "Before dispatch\n");
   wl_display_dispatch(state.dpy);
+  LOG(0, "state.seats: %u\n", state.seats.s);
 
   int32_t dpyfd = wl_display_get_fd(state.dpy);
   WLCHECK(dpyfd,"Could not get the display fd!");
-  int32_t pipfd = mkpip();
+  int32_t wfd;
+  int32_t pipfd = mkpip(&wfd);
   WLCHECK(pipfd,"Could not create the pipe!");
   int32_t rfd = STDIN_FILENO;
 
@@ -722,30 +827,37 @@ int main(int argc, char *argv[]) {
                            {.fd = rfd  , .events = POLLIN },
                            {.fd = pipfd, .events = POLLIN } };
 
+  /*
+  struct pollfd pfds[] = { 
+                           {.fd = rfd  , .events = POLLIN },
+                           {.fd = pipfd, .events = POLLIN } };
+                           */
+
   rdr = 1;
-  fprintf(errf, "Started!\n");
+  LOG(0, "Started!\n");
   render(&state.mon);
   wl_display_dispatch(state.dpy);
   int32_t pr;
   while (!state.closed) {
-    fprintf(errf, "WAIT POLL\n");
+    LOG(0, "WAIT POLL\n");
     pr = poll(pfds, SLEN(pfds), -1);
-    fprintf(errf, "GO POLL\n");
+    LOG(0, "GO POLL\n");
+    //fprintf(stdout, "%i-> %i %i %i %i %i %i %i %i %i %i %i %i %i\n", pr, pfds[0].revents, pfds[1].revents, pfds[2].revents, POLLIN, POLLRDNORM, POLLRDBAND, POLLPRI, POLLOUT, POLLWRNORM, POLLWRBAND, POLLERR, POLLHUP, POLLNVAL);
     if (pr < 0 && errno != EINTR) { 
-      fprintf(errf, "Could not poll for the filedescriptors! %m\n") ;
+      LOG(0, "Could not poll for the filedescriptors! %m\n") ;
     } else if (pr > 0) {
       if (pfds[0].revents & POLLIN) {
-        fprintf(errf, "Got wayland events!\n");
+        LOG(0, "Got wayland events!\n");
         rdr = 1;
         pfds[0].revents = 0; // Don't think this is necessary but some bloke on stackoverflow said it's good so here it is
       }
       if (pfds[1].revents & POLLIN) {
-        fprintf(errf, "Got dwl events!\n");
+        LOG(0, "Got dwl events!\n");
         check_dwl(rfd);
         pfds[1].revents = 0;
       }
       if (pfds[2].revents & POLLIN) {
-        fprintf(errf, "Got status events!\n");
+        LOG(0, "Got status events!\n");
         check_status(pipfd);
         pfds[2].revents = 0;
       }
@@ -755,9 +867,12 @@ int main(int argc, char *argv[]) {
         rdr = 0;
       }
     }
+    //struct timespec ts = { 0, 15000000L };
+    //nanosleep(ts, NULL);
   }
 
   close(rfd);
+  close(wfd);
   close(pipfd);
   close(dpyfd);
   unlink(statusPath);
