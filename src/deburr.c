@@ -244,10 +244,10 @@ double KMS_GAMMA = 1.0;
 uint64_t ablend(uint64_t co, uint64_t fc, uint64_t bc, double gamma) { /// Why has god forsaken me
 #define CTG(a,b,c,d) {b=(double)((a&0xFF0000)>>16)/255.0;c=(double)((a&0x00FF00)>>8)/255.0;d=(double)((a&0x0000FF)>>0)/255.0;}
 
-  //uint64_t ac = gcor(co, 1 / gamma);
-  uint64_t ac = co;
-  uint64_t af = gcor(fc, gamma);
-  uint64_t ab = gcor(bc, gamma);
+  uint64_t ac = gcor(co, 1 / gamma);
+  //uint64_t ac = co;
+  uint64_t af = fc;
+  uint64_t ab = bc;
 
   double r1, r2, r3, r4;
   double g1, g2, g3, g4;
@@ -260,11 +260,17 @@ uint64_t ablend(uint64_t co, uint64_t fc, uint64_t bc, double gamma) { /// Why h
 	g4 = g1 * g2 + (1.0 - g1) * g3;
 	b4 = b1 * b2 + (1.0 - b1) * b3;
 
-  uint64_t res =  ((uint64_t)      255    << 24) |
+  uint64_t bt;
+  if (co == 0xFFFFFFFF) {
+    bt = (fc >> 24) << 24;
+  } else {
+    bt = (bc >> 24) << 24;
+  }
+  uint64_t res =  bt |
                   ((uint64_t)(r4 * 255.0) << 16) |
                   ((uint64_t)(g4 * 255.0) <<  8) |
                   ((uint64_t)(b4 * 255.0) <<  0);
-  res = gcor(res, 1 / gamma);
+  //res = gcor(res, 1 / gamma);
   return res;
 #undef CTG
 }
@@ -295,7 +301,11 @@ void draw_char(struct cmon *mon, int32_t x, int32_t y, uint8_t cs, uint64_t fc, 
       } else {
         col = 0xFF000000 | ((uint64_t)CB.buffer[i * CB.pitch + j] << 16) | ((uint64_t)CB.buffer[i * CB.pitch + j] << 8) | ((uint64_t)CB.buffer[i * CB.pitch + j]);
       }
-      G(mon->sb.data + co, i + y, j + x, mon->sb.width) = ablend(col, fc, bc, gammaCorrections[cs]); // TODO: REVERT
+      if (!MANUAL_GAMMA) {
+        G(mon->sb.data + co, i + y, j + x, mon->sb.width) = ablend(col, fc, bc, gammaCorrections[cs]);
+      } else {
+        G(mon->sb.data + co, i + y, j + x, mon->sb.width) = ablend(col, fc, bc, KMS_GAMMA);
+      }
     }
   }
 }
@@ -841,6 +851,7 @@ int main(int argc, char *argv[]) {
   wl_display_dispatch(state.dpy);
   int32_t pr;
   while (!state.closed) {
+    if (!MANUAL_GAMMA) {
     LOG(0, "WAIT POLL\n");
     pr = poll(pfds, SLEN(pfds), -1);
     LOG(0, "GO POLL\n");
@@ -869,15 +880,18 @@ int main(int argc, char *argv[]) {
         rdr = 0;
       }
     }
-    /*
+    } else {
     rdr = 1;
-    fscanf(stdin, "%lf", &KMS_GAMMA);
+    if (fscanf(stdin, "%lf", &KMS_GAMMA)) {
+      fprintf(stdout, "ERROR READING\n");
+    }
     if (rdr) {
       render(&state.mon);
       wl_display_dispatch(state.dpy);
       rdr = 0;
     }
-    */
+    }
+    
   }
 
   close(rfd);
