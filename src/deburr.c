@@ -745,6 +745,12 @@ int32_t mkpip(int32_t *wfd) {
   return 0;
 }
 
+void interrupt_handler(sig_atomic_t sig) {
+  unlink(statusPath);
+  fclose(errf);
+  exit(sig);
+}
+
 int main(int argc, char *argv[]) {
   if (argc > 1) {
     if (strcmp(argv[1], "status") == 0) {
@@ -784,16 +790,21 @@ int main(int argc, char *argv[]) {
     }
     return 0;
   }
-  if (debugf[0]) {
+  /*if (debugf[0]) {
     errf = fopen(debugf, "w");
   } else {
     errf = stderr;
-  }
+  }*/
+  errf = stderr;
   setbuf(errf, NULL);
   LOG(0, "Start deburr\n");
   setlocale(LC_ALL, "");
   init_rand();
   LOG(0, "Init rand\n");
+
+  signal(SIGINT, interrupt_handler);
+  signal(SIGTERM, interrupt_handler);
+  signal(SIGHUP, interrupt_handler);
 
   init_freetype();
   LOG(0, "Init freetype\n");
@@ -868,11 +879,13 @@ int main(int argc, char *argv[]) {
         LOG(0, "Got dwl events!\n");
         check_dwl(rfd);
         pfds[1].revents = 0;
+        rdr = 1;
       }
       if (pfds[2].revents & POLLIN) {
         LOG(0, "Got status events!\n");
         check_status(pipfd);
         pfds[2].revents = 0;
+        rdr = 1;
       }
       if (rdr) {
         render(&state.mon);

@@ -8,6 +8,7 @@
 #include <wchar.h>
 #include <poll.h>
 #include <errno.h>
+#include <signal.h>
 #include <math.h>
 
 #include <ft2build.h>
