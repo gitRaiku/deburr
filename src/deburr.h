@@ -50,7 +50,7 @@ struct sbuf {
 
 struct cmon {
 	uint32_t n;
-  const char *xdgname;
+  char *xdgname;
   struct wl_output *out;
   struct zxdg_output_v1 *xout;
   struct zwlr_layer_surface_v1 *lsurf;
@@ -83,6 +83,7 @@ struct coutp {
 DEF_VECTOR_SUITE(seat, struct cseat)
 //DEF_VECTOR_SUITE(outp, struct coutp)
 
+#define CMON state.mons[i]
 #define LOG(imp,...) {if (log_level <= imp) {fprintf(errf, __VA_ARGS__);}}
 #define SLEN(x) (sizeof(x)/sizeof(x[0]))
 #define FUNNIERCSTRING(x) #x

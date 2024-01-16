@@ -57,6 +57,7 @@ $(BIN_DIR):
 build: $(BIN_DIR) $(PROT_OBJ_NAMES) $(BIN_DIR)/$(TARGET)
 
 install: build
+	@killall deburr || true
 	cp $(BIN_DIR)/$(TARGET) /usr/local/bin/$(TARGET)
 
 run: build

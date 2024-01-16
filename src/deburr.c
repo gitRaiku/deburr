@@ -45,7 +45,8 @@ struct cstate {
   //struct outpv outs;
   struct wl_cursor_image *pImg;
   struct wl_surface *pSurf;
-  struct cmon mon;
+  struct cmon *__restrict mons;
+  uint32_t monsl;
 
   uint32_t width, height;
   uint8_t closed;
@@ -76,9 +77,18 @@ void xwmb_ping(void *data, struct xdg_wm_base *xdg_wm_base, uint32_t serial) {
 }
 const struct xdg_wm_base_listener xwmb_listener = { .ping = xwmb_ping };
 
+struct cmon *mon_from_surf(struct wl_surface *surf) {
+  int32_t i;
+  for(i = 0; i < state.monsl; ++i) {
+    if (CMON.surf == surf) { return &CMON; }
+  }
+  LOG(10, "Could not find monitor from surface!\n");
+  return NULL;
+}
+
 void p_enter(void *data, struct wl_pointer *ptr, uint32_t serial, struct wl_surface *surface, wl_fixed_t x, wl_fixed_t y) {
   struct cseat *seat = data;
-  seat->p.fmon = &state.mon; // TODO: getCurrentMonitor for multiple monitors
+  seat->p.fmon = mon_from_surf(surface);
   seat->p.cpres = 0;
   if (!state.pImg) {
     struct wl_cursor_theme *cth = wl_cursor_theme_load(NULL, 32, state.shm);
@@ -159,7 +169,8 @@ const struct wl_seat_listener seat_listener = { .capabilities = seat_caps, .name
 
 void zxout_name(void* data, struct zxdg_output_v1* xout, const char* name) {
   struct cmon *mon = data;
-  mon->xdgname = name;
+  mon->xdgname = strdup(name);
+  LOG(0, "Got monitor name %s[Added to mon %u]\n", name, mon->n);
   zxdg_output_v1_destroy(xout);
 }
 const struct zxdg_output_v1_listener zxout_listener = { .name = zxout_name, .logical_position = zxout_logical_position, .logical_size = zxout_logical_size, .done = zxout_done, .description = zxout_description };
@@ -378,11 +389,9 @@ int32_t draw_string(struct cmon *mon, const wchar_t *__restrict s, uint32_t x, u
 
 void render(struct cmon *mon) {
   if (!mon->sb.b[0]) { return; }
-  //LOG(0, "RENDER TAG\n");
 
   draw_rect(mon, 0, 0, mon->sb.width, mon->sb.height, colors[SchemeNorm][BACKG]);
   {
-    //LOG(0, "STAG: %u %u\n", mon->stag, mon->ctag);
     int32_t i;
     uint32_t px = 0;
     uint32_t cl = 0;
@@ -439,23 +448,23 @@ void finish_init() {
 
   seatvt(&state.seats);
 
-  /// TODO: Add support for multiple monitors
   {
-    int32_t i;
-    uint32_t sl = draw_string(&state.mon, L" ", 0, 0, 0, 0, 0);
-    for(i = 0; i < 9; ++i) {
-      state.tlen[i] = sl * 2 + draw_string(&state.mon, tags[i], 0, 0, 0, 0, 0);
-      LOG(0, "Len ticon %i = %u\n", i, state.tlen[i]);
+    int32_t i, j;
+    for(i = 0; i < state.monsl; ++i) {
+      uint32_t sl = draw_string(&CMON, L" ", 0, 0, 0, 0, 0);
+      for(j = 0; j < 9; ++j) {
+        state.tlen[j] = sl * 2 + draw_string(&CMON, tags[j], 0, 0, 0, 0, 0);
+        LOG(0, "Len ticon %i = %u\n", j, state.tlen[j]);
+      }
+
+      wcscpy(CMON.status, L"いのちの食べ方 : Eve │ 17/05/2023 10:37 │ 15%-");
+      wcscpy(CMON.slayout, L"[M]");
+      CMON.stag = 1|2|8|32;
+      CMON.ctag = 4;
+      CMON.xout = zxdg_output_manager_v1_get_xdg_output(state.xoutmgr, CMON.out);
+      zxdg_output_v1_add_listener(CMON.xout, &zxout_listener, &CMON);
     }
   }
-
- 
-  wcscpy(state.mon.status, L"いのちの食べ方 : Eve │ 17/05/2023 10:37 │ 15%-");
-  wcscpy(state.mon.slayout, L"[M]");
-  state.mon.stag = 1|2|8|32;
-  state.mon.ctag = 4;
-  state.mon.xout = zxdg_output_manager_v1_get_xdg_output(state.xoutmgr, state.mon.out);
-  zxdg_output_v1_add_listener(state.mon.xout, &zxout_listener, &state.mon.out);
   wl_display_roundtrip(state.dpy);
 }
 
@@ -476,11 +485,14 @@ void reg_global(void *data, struct wl_registry *reg, uint32_t name, const char *
       seatvp(&state.seats, cs);
       wl_seat_add_listener(cbind, &seat_listener, state.seats.v + state.seats.l - 1););
   CHV(struct wl_output*, wl_output_interface           , WOUTV,
-      /// TODO: Handle multiple monitors
+      state.mons = realloc(state.mons, (state.monsl + 1) * sizeof(state.mons[0]));
       struct cmon mon = {0};
       mon.n = name;
+      LOG(0, "Added monitor: %u\n", name);
       mon.out = cbind;
-      state.mon = mon;);
+      state.mons[state.monsl] = mon;
+      ++state.monsl;
+      );
 #undef CHI
 #undef CHV
 }
@@ -605,19 +617,19 @@ void init_freetype() {
   }
 }
 
-void upt(char *__restrict s, uint32_t sl) { /// TODO: Support multiple monitors
+void upt(struct cmon *curMon, char *__restrict s, uint32_t sl) {
   uint32_t cl = 0; 
-  state.mon.stag = 0;
-  state.mon.ctag = 0;
+  curMon->stag = 0;
+  curMon->ctag = 0;
   while (s[cl] != ' ' && cl < sl) {
-    state.mon.stag *= 10;
-    state.mon.stag += s[cl] - '0';
+    curMon->stag *= 10;
+    curMon->stag += s[cl] - '0';
     ++cl;
   }
   ++cl;
   while (s[cl] != ' ' && cl < sl) {
-    state.mon.ctag *= 10;
-    state.mon.ctag += s[cl] - '0';
+    curMon->ctag *= 10;
+    curMon->ctag += s[cl] - '0';
     ++cl;
   }
 }
@@ -675,7 +687,20 @@ void check_status(int32_t fd) {
   WLCHECK(rl>=0,"Could not read from the status file!\n");
   c[rl] = '\0';
   LOG(0, "Read status %u[%s]!\n", rl, c);
-  utf2wwch(c, state.mon.status);
+  int32_t i;
+  for(i = 0; i < state.monsl; ++i) {
+    utf2wwch(c, CMON.status);
+  }
+}
+
+struct cmon *mon_from_name(char *name) {
+  int32_t i;
+  for(i = 0; i < state.monsl; ++i) {
+    LOG(0, "MONF: %s\n", CMON.xdgname);
+    if (!strcmp(CMON.xdgname, name)) { return &CMON; }
+  }
+  LOG(10, "Could not find monitor from name!\n");
+  return NULL;
 }
 
 void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
@@ -689,10 +714,10 @@ void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
 
   char cbuf[1024];
   int32_t rl = 0;
-  LOG(0, "BREAD\n");
   rl = read(rfd, cbuf, SLEN(cbuf));
-  LOG(0, "AREAD\n");
   cbuf[rl] = '\0';
+  LOG(0, "TMPTMPTMPTMP\n");
+  LOG(0, "Cbf: %s\n", cbuf);
 
   if (rl) {
     int32_t i;
@@ -700,16 +725,19 @@ void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
       if (cbuf[i] == ' ' && cc < 2) { b[cc][bl[cc]] = '\0'; ++cc; } 
       else if (cbuf[i] == '\n') {
         b[cc][bl[cc]] = '\0';
+        LOG(0, "Got read: %s - %s - %s\n", b[0], b[1], b[2]);
+        struct cmon *curMon = mon_from_name(b[0]);
+        LOG(0, "Got monitor: %p\n", curMon);
         cc = 0;
 
         if (strcmp(b[1], "tags") == 0) {
-          upt(b[2], bl[2]);
+          upt(curMon, b[2], bl[2]);
           rdr = 1;
         } else if (strcmp(b[1], "layout") == 0) {
-          utf2wwch(b[2], state.mon.slayout);
+          utf2wwch(b[2], curMon->slayout);
           rdr = 1;
         } else if (strcmp(b[1], "debug") == 0) {
-          upt(b[2], bl[2]);
+          upt(curMon, b[2], bl[2]);
           rdr = 1;
         }
 
@@ -751,6 +779,8 @@ void interrupt_handler(sig_atomic_t sig) {
   exit(sig);
 }
 
+void render_mons() { int32_t i; for(i = 0; i < state.monsl; ++i) { render(state.mons + i); } }
+
 int main(int argc, char *argv[]) {
   if (argc > 1) {
     if (strcmp(argv[1], "status") == 0) {
@@ -791,55 +821,51 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  errf = stderr;
+  if (debugf[0] == '\0') {
+    errf = stderr;
+  } else {
+    errf = fopen(debugf, "w");
+  }
+    
   setbuf(errf, NULL);
-  LOG(0, "Start deburr\n");
   setlocale(LC_ALL, "");
   init_rand();
-  LOG(0, "Init rand\n");
 
   signal(SIGINT, interrupt_handler);
   signal(SIGTERM, interrupt_handler);
   signal(SIGHUP, interrupt_handler);
 
   init_freetype();
-  LOG(0, "Init freetype\n");
   barHeight = ((fts.face[0]->bbox.yMax + fts.face[0]->underline_thickness) >> 6);
   fontPadding = barHeight * padding;
   barHeight += fontPadding * 2;
   memset(&state, 0, sizeof(state));
-  LOG(0, "Before dpy\n");
   WLCHECK(state.dpy=wl_display_connect(NULL),"Could not connect to the wayland display!");
-  LOG(0, "Before reg\n");
   WLCHECK(state.reg=wl_display_get_registry(state.dpy),"Could not fetch the wayland registry!");
-  LOG(0, "Before addl\n");
   seatvi(&state.seats);
   wl_registry_add_listener(state.reg, &reg_listener, NULL);
-  LOG(0, "Before roundrtip\n");
   wl_display_roundtrip(state.dpy);
-  LOG(0, "Before finish\n");
   finish_init();
 
-  state.mon.surf = wl_compositor_create_surface(state.comp); WLCHECK(state.mon.surf,"Cannot create wayland surface!");
-  state.mon.lsurf = zwlr_layer_shell_v1_get_layer_surface(state.zwlr, state.mon.surf, state.mon.out, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, "Deburr"); WLCHECK(state.mon.lsurf,"Cannot create zwlr surface!");
-  LOG(0, "Before zwlr\n");
-  zwlr_layer_surface_v1_add_listener(state.mon.lsurf, &zwlr_listener, &state.mon);
-  zwlr_layer_surface_v1_set_anchor(state.mon.lsurf, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+  {
+    int32_t i;
+    for(i = 0; i < state.monsl; ++i) {
+      CMON.surf = wl_compositor_create_surface(state.comp); WLCHECK(CMON.surf,"Cannot create wayland surface!");
+      CMON.lsurf = zwlr_layer_shell_v1_get_layer_surface(state.zwlr, CMON.surf, CMON.out, ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, "Deburr"); WLCHECK(CMON.lsurf,"Cannot create zwlr surface!");
+      zwlr_layer_surface_v1_add_listener(CMON.lsurf, &zwlr_listener, &CMON);
+      zwlr_layer_surface_v1_set_anchor(CMON.lsurf, ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
 
-  zwlr_layer_surface_v1_set_size(state.mon.lsurf, 0, barHeight);
-  zwlr_layer_surface_v1_set_keyboard_interactivity(state.mon.lsurf, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
-  zwlr_layer_surface_v1_set_exclusive_zone(state.mon.lsurf, barHeight);
-  LOG(0, "Before commit\n");
-  wl_surface_commit(state.mon.surf);
-  LOG(0, "Before dispatch\n");
+      zwlr_layer_surface_v1_set_size(CMON.lsurf, 0, barHeight);
+      zwlr_layer_surface_v1_set_keyboard_interactivity(CMON.lsurf, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+      zwlr_layer_surface_v1_set_exclusive_zone(CMON.lsurf, barHeight);
+      wl_surface_commit(CMON.surf);
+    }
+  }
   wl_display_dispatch(state.dpy);
-  LOG(0, "state.seats: %u\n", state.seats.s);
 
-  int32_t dpyfd = wl_display_get_fd(state.dpy);
-  WLCHECK(dpyfd,"Could not get the display fd!");
+  int32_t dpyfd = wl_display_get_fd(state.dpy); WLCHECK(dpyfd,"Could not get the display fd!");
   int32_t wfd;
-  int32_t pipfd = mkpip(&wfd);
-  WLCHECK(pipfd,"Could not create the pipe!");
+  int32_t pipfd = mkpip(&wfd); WLCHECK(pipfd,"Could not create the pipe!");
   int32_t rfd = STDIN_FILENO;
 
   struct pollfd pfds[] = { {.fd = dpyfd, .events = POLLIN },
@@ -854,51 +880,55 @@ int main(int argc, char *argv[]) {
 
   rdr = 1;
   LOG(0, "Started!\n");
-  render(&state.mon);
+  render_mons();
   wl_display_dispatch(state.dpy);
   int32_t pr;
   while (!state.closed) {
     if (!MANUAL_GAMMA) {
-    LOG(0, "WAIT POLL\n");
-    pr = poll(pfds, SLEN(pfds), -1);
-    LOG(0, "GO POLL\n");
-    //fprintf(stdout, "%i-> %i %i %i %i %i %i %i %i %i %i %i %i %i\n", pr, pfds[0].revents, pfds[1].revents, pfds[2].revents, POLLIN, POLLRDNORM, POLLRDBAND, POLLPRI, POLLOUT, POLLWRNORM, POLLWRBAND, POLLERR, POLLHUP, POLLNVAL);
-    if (pr < 0 && errno != EINTR) { 
-      LOG(0, "Could not poll for the filedescriptors! %m\n") ;
-    } else if (pr > 0) {
-      if (pfds[0].revents & POLLIN) {
-        LOG(0, "Got wayland events!\n");
-        rdr = 1;
-        pfds[0].revents = 0; // Don't think this is necessary but some bloke on stackoverflow said it's good so here it is
+      LOG(0, "WAIT POLL\n");
+      pr = poll(pfds, SLEN(pfds), -1);
+      LOG(0, "GO POLL\n");
+      if (pr < 0 && errno != EINTR) { 
+        LOG(0, "Could not poll for the filedescriptors! %m\n") ;
+      } else if (pr > 0) {
+        if (pfds[0].revents & POLLIN) {
+          LOG(0, "Got wayland events!\n");
+          rdr = 1;
+          pfds[0].revents = 0; // Don't think this is necessary but some bloke on stackoverflow said it's good so here it is
+        }
+        if (pfds[1].revents & POLLIN) {
+          LOG(0, "Got dwl events!\n");
+          check_dwl(rfd);
+          LOG(0, "Finish dwl events!\n");
+          pfds[1].revents = 0;
+          rdr = 1;
+        }
+        if (pfds[2].revents & POLLIN) {
+          LOG(0, "Got status events!\n");
+          check_status(pipfd);
+          LOG(0, "Finish status events!\n");
+          pfds[2].revents = 0;
+          rdr = 1;
+        }
+        if (rdr) {
+          LOG(0, "prerender!\n");
+          render_mons();
+          LOG(0, "postredn!\n");
+          wl_display_dispatch(state.dpy);
+          LOG(0, "posdispatch!\n");
+          rdr = 0;
+        }
       }
-      if (pfds[1].revents & POLLIN) {
-        LOG(0, "Got dwl events!\n");
-        check_dwl(rfd);
-        pfds[1].revents = 0;
-        rdr = 1;
-      }
-      if (pfds[2].revents & POLLIN) {
-        LOG(0, "Got status events!\n");
-        check_status(pipfd);
-        pfds[2].revents = 0;
-        rdr = 1;
+    } else {
+      rdr = 1;
+      if (fscanf(stdin, "%lf", &KMS_GAMMA)) {
+        fprintf(stdout, "ERROR READING\n");
       }
       if (rdr) {
-        render(&state.mon);
+        render_mons();
         wl_display_dispatch(state.dpy);
         rdr = 0;
       }
-    }
-    } else {
-    rdr = 1;
-    if (fscanf(stdin, "%lf", &KMS_GAMMA)) {
-      fprintf(stdout, "ERROR READING\n");
-    }
-    if (rdr) {
-      render(&state.mon);
-      wl_display_dispatch(state.dpy);
-      rdr = 0;
-    }
     }
     
   }
