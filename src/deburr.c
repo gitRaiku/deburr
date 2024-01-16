@@ -790,11 +790,7 @@ int main(int argc, char *argv[]) {
     }
     return 0;
   }
-  /*if (debugf[0]) {
-    errf = fopen(debugf, "w");
-  } else {
-    errf = stderr;
-  }*/
+
   errf = stderr;
   setbuf(errf, NULL);
   LOG(0, "Start deburr\n");

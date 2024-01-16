@@ -41,6 +41,6 @@ static const uint64_t colors[2][3]      = {
   //[SchemeSel] = { col_black, col_red, col_red, },
 };
 
-static const uint8_t log_level = 0;            /// Debug vars (0 -> print everything, 10 -> print errors)
+static const uint8_t log_level = 10;            /// Debug vars (0 -> print everything, 10 -> print errors)
 static const char debugf[] = "/tmp/deburr-log"; /// If "" print to stderr
-//static const char debugf[] = "";
+
