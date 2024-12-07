@@ -24,6 +24,10 @@ Setting the status can be done using
 ```
 deburr status <custom status>
 ```
+or by writing to
+```
+echo "<custom status>" > /tmp/deburrstat
+``
 
 # Improvements
 As it stands deburr currently lacks being able to click on tags to switch to them, multiple monitor support, and a few font rendering kinks which i will probably fix sometime in the near or far future :3

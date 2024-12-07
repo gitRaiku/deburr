@@ -35,7 +35,8 @@ enum Colors { FOREG, BACKG, BORDER };
 static const uint64_t colors[2][3]      = {
 	//     fg         bg         border  
   [SchemeNorm] = { 0xFFBBB8C0, 0xDA151717, 0xFFFFFFFF},
-  [SchemeSel] = { 0xFF111513, 0xE0936ab0, 0xFFFF0FFF},
+  [SchemeSel] = { 0xFF111513, 0xE0969496, 0xFFFF0FFF},
+//
 
   //[SchemeNorm] = { col_gray3, col_gray, col_gray2 },
   //[SchemeSel] = { col_black, col_red, col_red, },

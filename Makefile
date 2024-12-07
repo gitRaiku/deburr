@@ -67,7 +67,7 @@ debug: build
 	gdb -q $(BIN_DIR)/$(TARGET)
 
 clean:
-	rm -f  $(C_OBJ)
-	rm -f  $(PROT_NAMES:%=$(PRT_DIR)/%-protocol.h)
-	rm -f  $(PROT_NAMES:%=$(PRT_DIR)/%-protocol.c)
-	rm -rf $(OBJ_DIR)/$(PRT_DIR)
+	sudo rm -f  $(C_OBJ)
+	sudo rm -f  $(PROT_NAMES:%=$(PRT_DIR)/%-protocol.h)
+	sudo rm -f  $(PROT_NAMES:%=$(PRT_DIR)/%-protocol.c)
+	sudo rm -rf $(OBJ_DIR)/$(PRT_DIR)

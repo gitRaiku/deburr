@@ -457,7 +457,7 @@ void finish_init() {
         LOG(0, "Len ticon %i = %u\n", j, state.tlen[j]);
       }
 
-      wcscpy(CMON.status, L"いのちの食べ方 : Eve │ 17/05/2023 10:37 │ 15%-");
+      wcscpy(CMON.status, L"");
       wcscpy(CMON.slayout, L"[M]");
       CMON.stag = 1|2|8|32;
       CMON.ctag = 4;
