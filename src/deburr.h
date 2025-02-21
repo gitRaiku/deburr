@@ -31,14 +31,6 @@
 #include "config.h"
 #include "vecs.h"
 
-#define COMPV 4
-#define SHMV 1
-#define ZWLRV 4
-#define XWMBASEV 2
-#define XOUTMGRV 3
-#define SEATV 7
-#define WOUTV 1
-
 struct sbuf {
   uint32_t height, width;
   uint32_t size;

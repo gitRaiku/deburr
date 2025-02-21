@@ -13,6 +13,13 @@ sudo make install
 ```
 should build it and copy it to `/usr/local/bin`
 
+# Warning
+If you get an error like this
+
+```wl_registry#2: error 0: invalid version for global zwlr_layer_shell_v1 (22): have 3, wanted 4```
+
+edit OVERRIDE_ZWLR_VERSION in ``config.h`` to the version provided by dwl.
+
 # Usage
 When starting dwl run it as
 ```

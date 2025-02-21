@@ -1,5 +1,7 @@
 #include <stdint.h>
 
+#define OVERRIDE_ZWLR_VERSION 0
+
 static const char statusPath[] = "/tmp/deburrstat"; // Location of the status pipe (through which you can set the status)
 
 
@@ -42,6 +44,7 @@ static const uint64_t colors[2][3]      = {
   //[SchemeSel] = { col_black, col_red, col_red, },
 };
 
-static const uint8_t log_level = 0;            /// Debug vars (0 -> print everything, 10 -> print errors)
-static const char debugf[] = "/tmp/deburr-log"; /// If "" print to stderr
+static const uint8_t log_level = 5;            /// Debug vars (0 -> print everything, 10 -> print errors)
+//static const char debugf[] = "/tmp/deburr-log"; /// If "" print to stderr
+static const char debugf[] = ""; /// If "" print to stderr
 

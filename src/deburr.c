@@ -442,7 +442,7 @@ void finish_init() {
 #define CHECK_INIT(x, e, v) {if (!state. x) { LOG(10, "Your wayland compositor does not support " #e " version " #v "which is required for me to work :(\n"); exit(1); }}
   CHECK_INIT(comp      , wl_compositor         , COMPV   );
   CHECK_INIT(shm       , wl_shm                , SHMV    );
-  CHECK_INIT(zwlr      , zwlr_layer_shell_v1   , ZWLRV   );
+  CHECK_INIT(zwlr      , zwlr_layer_shell_v1   , zwlr_layer_shell_v1.version  );
   CHECK_INIT(xoutmgr   , zxdg_output_manager_v1, XOUTMGRV);
 #undef CHECK_INIT
 
@@ -472,19 +472,23 @@ void reg_global(void *data, struct wl_registry *reg, uint32_t name, const char *
 #define CHI(x,y,z,w) {if(!strcmp(iface,y .name)) {state. x=wl_registry_bind(reg, name, &y, z);w;return;}}
 #define CHV(x,y,z,w) {if(!strcmp(iface,y .name)) {x cbind=wl_registry_bind(reg, name, &y, z);w;return;}}
 
-  CHI(comp           , wl_compositor_interface         , COMPV,);
-  CHI(shm            , wl_shm_interface                , SHMV,);
-  CHI(zwlr           , zwlr_layer_shell_v1_interface   , ZWLRV,);
-  CHI(xwmBase        , xdg_wm_base_interface           , XWMBASEV,
+  CHI(comp           , wl_compositor_interface         , wl_compositor_interface.version,);
+  CHI(shm            , wl_shm_interface                , wl_shm_interface.version,);
+#if OVERRIDE_ZWLR_VERSION
+  CHI(zwlr           , zwlr_layer_shell_v1_interface   , OVERRIDE_ZWLR_VERSION,);
+#else
+  CHI(zwlr           , zwlr_layer_shell_v1_interface   , zwlr_layer_shell_v1_interface.version,);
+#endif
+  CHI(xwmBase        , xdg_wm_base_interface           , xdg_wm_base_interface.version,
       xdg_wm_base_add_listener(state.xwmBase, &xwmb_listener, NULL));
-  CHI(xoutmgr        , zxdg_output_manager_v1_interface, XOUTMGRV,);
-  CHV(struct wl_seat*, wl_seat_interface               , SEATV,
+  CHI(xoutmgr        , zxdg_output_manager_v1_interface, zxdg_output_manager_v1_interface.version,);
+  CHV(struct wl_seat*, wl_seat_interface               , wl_seat_interface.version,
       struct cseat cs = {0};
       cs.n = name;
       cs.s = cbind;
       seatvp(&state.seats, cs);
       wl_seat_add_listener(cbind, &seat_listener, state.seats.v + state.seats.l - 1););
-  CHV(struct wl_output*, wl_output_interface           , WOUTV,
+  CHV(struct wl_output*, wl_output_interface           , wl_output_interface.version,
       state.mons = realloc(state.mons, (state.monsl + 1) * sizeof(state.mons[0]));
       struct cmon mon = {0};
       mon.n = name;
@@ -703,11 +707,7 @@ struct cmon *mon_from_name(char *name) {
   return NULL;
 }
 
-void check_dwl(int32_t rfd) { /// I CANNOT ANYMORE
-                              /// POLL() IS SHIT
-                              /// DOESN'T RESET
-                              /// ON READ WHAT THE
-                              /// FUCK FUCK FUCK
+void check_dwl(int32_t rfd) {
   static char     b[3][256] = { 0 };
   static uint8_t bl[3]      = { 0 };
   static uint8_t cc = 0;
@@ -783,6 +783,11 @@ void render_mons() { int32_t i; for(i = 0; i < state.monsl; ++i) { render(state.
 
 int main(int argc, char *argv[]) {
   if (argc > 1) {
+    if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "help") == 0 || strcmp(argv[1], "-h") == 0) {
+      fprintf(stderr, "Usage:\n");
+      fprintf(stderr, "  deburr [status <status_message>]\n");
+      exit(0);
+    }
     if (strcmp(argv[1], "status") == 0) {
       char a[1024] = { 0 };
       uint32_t al = 0;
@@ -883,11 +888,19 @@ int main(int argc, char *argv[]) {
   render_mons();
   wl_display_dispatch(state.dpy);
   int32_t pr;
+  uint32_t cframe = 0;
   while (!state.closed) {
     if (!MANUAL_GAMMA) {
-      LOG(0, "WAIT POLL\n");
+      LOG(0, "WAIT FLUSH %u\n", cframe);
+
+      wl_display_flush(state.dpy);
+      LOG(0, "WAIT ROUNDTRIP %u\n", cframe);
+      wl_display_roundtrip(state.dpy);
+      LOG(0, "WAIT POLL %u\n", cframe);
       pr = poll(pfds, SLEN(pfds), -1);
-      LOG(0, "GO POLL\n");
+
+      LOG(0, "GO POLL %u\n", cframe); ++cframe;
+      LOG(0, "GOT (pr)%u - %u %u %u\n", pr, pfds[0].revents, pfds[1].revents, pfds[2].revents);
       if (pr < 0 && errno != EINTR) { 
         LOG(0, "Could not poll for the filedescriptors! %m\n") ;
       } else if (pr > 0) {
