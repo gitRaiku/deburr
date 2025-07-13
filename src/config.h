@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-#define OVERRIDE_ZWLR_VERSION 0
+#define OVERRIDE_ZWLR_VERSION 3
 
 static const char statusPath[] = "/tmp/deburrstat"; // Location of the status pipe (through which you can set the status)
 

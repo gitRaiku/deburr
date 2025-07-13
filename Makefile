@@ -21,7 +21,7 @@ COMPILE_FLAGS := -ggdb3 -Og -Wall -march=native -mtune=native -fmodulo-sched \
 					       -fstack-clash-protection -pthread -pipe \
 					       -fkeep-inline-functions -D_FORTIFY_SOURCE=2 -D_GNU_SOURCE \
 								 -I/usr/include/freetype2 -I/usr/include/libpng16 -I/usr/include/harfbuzz \
-								 -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-4
+								 -I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include -I/usr/include/sysprof-4 \
 
 INCLUDE_FLAGS  := 
 LIBRARY_FLAGS  := -lwayland-client -lwayland-cursor -lfreetype -lfontconfig -lm

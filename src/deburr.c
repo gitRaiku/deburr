@@ -158,7 +158,17 @@ void p_frame(void *data, struct wl_pointer *ptr) {
 const struct wl_pointer_listener pointer_listener = { .enter = p_enter, .leave = p_leave, .motion = p_motion, .button = p_button, .frame = p_frame, .axis = p_axis, .axis_source = p_axis_source, .axis_stop = p_axis_stop, .axis_discrete = p_axis_discrete };
 
 void seat_caps(void *data, struct wl_seat *s, uint32_t caps) {
-  struct cseat *seat = data;
+  int32_t i;
+  struct cseat *seat = NULL;
+  for(i = 0; i < state.seats.l; ++i) {
+    if (state.seats.v[i].s == s) {
+      seat = state.seats.v + i;
+      fprintf(stdout, "Found seat %u!\n", i);
+      break;
+    }
+  }
+  if (seat == NULL) { return; }
+
   uint8_t hasPointer = caps & WL_SEAT_CAPABILITY_POINTER;
   if (!seat->p.p && hasPointer) {
     seat->p.p = wl_seat_get_pointer(seat->s);
@@ -487,7 +497,7 @@ void reg_global(void *data, struct wl_registry *reg, uint32_t name, const char *
       cs.n = name;
       cs.s = cbind;
       seatvp(&state.seats, cs);
-      wl_seat_add_listener(cbind, &seat_listener, state.seats.v + state.seats.l - 1););
+      wl_seat_add_listener(cbind, &seat_listener, NULL););
   CHV(struct wl_output*, wl_output_interface           , wl_output_interface.version,
       state.mons = realloc(state.mons, (state.monsl + 1) * sizeof(state.mons[0]));
       struct cmon mon = {0};
@@ -532,7 +542,7 @@ uint8_t get_font_info(FcPattern *pattern, struct fontInfo *__restrict i) {
 #define QI(v,p,d) {switch (FcPatternGetInteger(pattern, p, 0, &v)) { case FcResultNoMatch: v = d; break; case FcResultMatch: break; default: goto fi_crash; }}
   char *cf;
   WLCHECK(FcPatternGetString(pattern, FC_FILE, 0, (FcChar8 **)&cf)==FcResultMatch,"Could not find a suitable font!");
-  i->fname = malloc(strlen(cf));
+  i->fname = malloc(strlen(cf) + 1);
   strcpy(i->fname, cf);
   
   double psize;
@@ -943,9 +953,9 @@ int main(int argc, char *argv[]) {
         rdr = 0;
       }
     }
-    
   }
 
+  FT_Done_FreeType(fts.l);
   close(rfd);
   close(wfd);
   close(pipfd);
