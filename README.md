@@ -27,6 +27,12 @@ dwl -s deburr
 ```
 This is so that the program can get all the status changes dwl prints out
 
+If you instead wish to use the ipc patch for dwl you can use [dwlmsg](https://codeberg.org/notchoc/dwlmsg)
+```
+dwlmsg -w | deburr &
+```
+By adding this to your dwl autostart script.
+
 Setting the status can be done using
 ```
 deburr status <custom status>

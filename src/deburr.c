@@ -68,6 +68,8 @@ void p_axis(void *d, struct wl_pointer *p, uint32_t t, uint32_t a, wl_fixed_t v)
 void p_axis_source(void *d, struct wl_pointer *p, uint32_t s) { }
 void p_axis_stop(void *d, struct wl_pointer *p, uint32_t t, uint32_t s) { }
 void p_axis_discrete(void *d, struct wl_pointer *p, uint32_t t, int s) { }
+void p_axis_relative_direction(void *data, struct wl_pointer *ptr, uint32_t axis, uint32_t direction) { }
+void p_axis_value120(void *data, struct wl_pointer *ptr, uint32_t axis, int32_t value120) {}
 void reg_global_remove(void *data, struct wl_registry *reg, uint32_t name) { }
 
 // Now onto the actual (shit) code
@@ -155,7 +157,7 @@ void p_frame(void *data, struct wl_pointer *ptr) {
   }
 }
 
-const struct wl_pointer_listener pointer_listener = { .enter = p_enter, .leave = p_leave, .motion = p_motion, .button = p_button, .frame = p_frame, .axis = p_axis, .axis_source = p_axis_source, .axis_stop = p_axis_stop, .axis_discrete = p_axis_discrete };
+const struct wl_pointer_listener pointer_listener = { .enter = p_enter, .leave = p_leave, .motion = p_motion, .button = p_button, .frame = p_frame, .axis = p_axis, .axis_source = p_axis_source, .axis_stop = p_axis_stop, .axis_discrete = p_axis_discrete, .axis_value120 = p_axis_value120, .axis_relative_direction = p_axis_relative_direction};
 
 void seat_caps(void *data, struct wl_seat *s, uint32_t caps) {
   int32_t i;
@@ -954,6 +956,7 @@ int main(int argc, char *argv[]) {
       }
     }
   }
+  LOG(0, "State.closed: %u", state.closed);
 
   FT_Done_FreeType(fts.l);
   close(rfd);

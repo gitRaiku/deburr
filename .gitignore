@@ -2,3 +2,6 @@
 .obj/
 protocol/*.c
 protocol/*.h
+bin/
+bin/deburr
+*.valgrind
